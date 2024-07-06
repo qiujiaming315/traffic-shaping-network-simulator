@@ -14,7 +14,7 @@ def get_latency_distribution(flow_dir, route_dir, num_episodes, plot_path, plot_
         reprofiling_delay = np.minimum(flow_profile[:, 2], flow_profile[:, 1] / flow_profile[:, 0])
         # Establish the network environment.
         env = NetworkEnv(flow_profile, flow_route, reprofiling_delay, simulation_time, terminate_time=simulation_time,
-                         pattern=traffic_pattern, awake_dur=awake_dur)
+                         pattern_type=traffic_pattern, awake_dur=awake_dur)
         # Start the simulation.
         _ = env.reset()
         done = False

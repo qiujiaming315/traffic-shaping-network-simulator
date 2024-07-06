@@ -9,8 +9,9 @@ from lib.network_component import NetworkComponent, TokenBucketFluid, TokenBucke
 class NetworkEnv:
     """A network environment for RL sampling similar to a openai.gym environment."""
 
-    def __init__(self, flow_profile, flow_path, reprofiling_delay, interval, terminate_time=1000, pattern="sync",
-                 awake_dur=None, high_reward=1, low_reward=0.1, penalty=-10, tor=0.003):
+    def __init__(self, flow_profile, flow_path, reprofiling_delay, interval, terminate_time=1000,
+                 pattern_type="sync_burst", awake_dur=None, pattern=None, scaling_factor=1.0, high_reward=1,
+                 low_reward=0.1, penalty=-10, tor=0.003):
         flow_profile = np.array(flow_profile)
         flow_path = np.array(flow_path)
         reprofiling_delay = np.array(reprofiling_delay)
@@ -21,12 +22,13 @@ class NetworkEnv:
         self.reprofiling_delay = reprofiling_delay
         self.interval = interval
         self.terminate_time = terminate_time
-        self.pattern = pattern
+        self.pattern_type = pattern_type
         self.awake_dur = terminate_time / 100 if awake_dur is None else awake_dur
+        self.scaling_factor = scaling_factor
         self.high_reward = high_reward
         self.low_reward = low_reward
         self.penalty = penalty
-        self.arrival_pattern = self.generate_arrival_pattern()
+        self.arrival_pattern = self.generate_arrival_pattern() if pattern is None else pattern
         # Configure the network components.
         reprofiling_rate = flow_profile[:, 1] / reprofiling_delay
         reprofiling_burst = flow_profile[:, 1] - flow_profile[:, 0] * reprofiling_delay
@@ -37,7 +39,7 @@ class NetworkEnv:
         self.link_packetization_delay = []
         for link_idx in range(self.num_link):
             link_flow_mask = flow_path[:, link_idx] > 0
-            link_bandwidth = np.sum(reprofiling_rate[link_flow_mask])
+            link_bandwidth = np.sum(reprofiling_rate[link_flow_mask]) * scaling_factor
             self.link_packetization_delay.append(np.sum(link_flow_mask) / link_bandwidth)
             self.schedulers.append(FIFOScheduler(link_bandwidth, self.num_flow))
             for flow_idx in np.arange(self.num_flow)[link_flow_mask]:
@@ -194,7 +196,7 @@ class NetworkEnv:
             pattern[1].append(arrival_traffic)
             return terminate
 
-        if self.pattern.startswith("sync"):
+        if self.pattern_type.startswith("sync"):
             # Compute the synchronized awake and sleep time for all the flows.
             sync_arrival, sync_time = [0], 0
             awake_bottleneck = np.amax(1 / self.flow_profile[:, 0])
@@ -210,7 +212,7 @@ class NetworkEnv:
                 if sync_time >= self.terminate_time:
                     break
                 sync_arrival.append(sync_time)
-                if self.pattern == "sync_smooth":
+                if self.pattern_type == "sync_smooth":
                     sleep_dur = np.random.rand() * sleep_bottleneck_smooth
                 else:
                     sleep_dur = sleep_bottleneck_burst
