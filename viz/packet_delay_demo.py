@@ -18,26 +18,21 @@ def setup_axis():
     return ax
 
 
-def plot_delay(arrival_time, end_to_end_delay, output_path, fig_name, segment=None):
+def plot_delay_statistics(x_data, y_data, labels, output_path, fig_name, percent_format=True):
     ax = setup_axis()
-    ax.set_ylabel("End-to-end Delay", labelpad=10, color='#333333', size=40)
-    ax.set_xlabel("Packet Arrival Time", labelpad=15, color='#333333', size=40)
-    ax.yaxis.set_major_formatter(mtick.PercentFormatter())
-    num_flow = len(arrival_time)
+    x_values, xlabel = x_data
+    y_values, ylabel = y_data
+    x_values, y_values = np.array(x_values), np.array(y_values)
+    ax.set_ylabel(ylabel, labelpad=10, color='#333333', size=40)
+    ax.set_xlabel(xlabel, labelpad=15, color='#333333', size=40)
+    if percent_format:
+        ax.yaxis.set_major_formatter(mtick.PercentFormatter())
+    num_line = len(y_values)
     colors = ["#7FB3D5", "#F7CAC9", "#A2C8B5", "#D9AFD9", "#D3D3D3", "#FFFF99", "#FFD1DC", "#9AD1D4", "#B19CD9",
               "#B0AFAF"]
-    assert len(colors) >= num_flow, "Too many flows."
-    labels = [f"flow {i + 1}" for i in range(num_flow)]
-    arrival_aggregate = []
-    for xdata, ydata, color, label in zip(arrival_time, end_to_end_delay, colors, labels):
-        xdata, ydata = np.array(xdata), np.array(ydata)
-        if segment is not None:
-            mask = np.logical_and(xdata >= segment[0], xdata <= segment[1])
-            xdata, ydata = xdata[mask], ydata[mask]
-        ax.plot(xdata, ydata, 'o-', color=color, label=label, linewidth=3, markersize=9)
-        arrival_aggregate.extend(list(xdata))
-    ax.hlines(100, np.amin(arrival_aggregate), np.amax(arrival_aggregate), colors="red", linewidth=5,
-              label='hard delay bound')
+    assert len(colors) >= num_line, "Too many lines to visualize."
+    for y_value, color, label in zip(y_values, colors, labels):
+        ax.plot(x_values, y_value, 'o-', color=color, label=label, linewidth=3, markersize=9)
     plt.legend(fontsize=35)
     plt.tight_layout()
     plt.savefig(os.path.join(output_path, fig_name + ".png"), bbox_inches='tight')

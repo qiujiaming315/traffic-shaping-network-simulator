@@ -1,4 +1,5 @@
 from bisect import bisect_left
+import numpy as np
 
 
 class NetworkComponent:
@@ -8,7 +9,7 @@ class NetworkComponent:
         self.idle = True
         return
 
-    def arrive(self, time, component_idx):
+    def arrive(self, time, component_idx, is_internal):
         """Method to add an arriving packet to backlog."""
         return
 
@@ -27,10 +28,11 @@ class NetworkComponent:
 
 class TokenBucket(NetworkComponent):
 
-    def __init__(self, rate, burst, component_idx=0):
+    def __init__(self, rate, burst, component_idx=0, internal=False):
         self.rate = rate
         self.burst = burst
         self.component_idx = component_idx
+        self.internal = internal
         self.active = True
         self.backlog = []
         self.token = burst
@@ -39,14 +41,14 @@ class TokenBucket(NetworkComponent):
         super().__init__()
         return
 
-    def arrive(self, time, component_idx):
+    def arrive(self, time, component_idx, is_internal):
         self.backlog.append(time)
         return self.idle
 
     def forward(self, time):
         if len(self.backlog) == 0:
             # Redundant forward event. Ignore.
-            return time, self.idle, (0, 0, None)
+            return time, self.idle, 0, 0, None
         component_idx, next_component = 0, None
         if self.idle:
             # Initiate a busy period.
@@ -66,7 +68,7 @@ class TokenBucket(NetworkComponent):
             if len(self.backlog) == 0:
                 # Terminate a busy period.
                 self.idle = True
-                return time, self.idle, (component_idx, self.packet_count, next_component)
+                return time, self.idle, component_idx, self.packet_count, next_component
         # Examine the next packet.
         next_arrival = self.backlog[0]
         next_depart = time
@@ -75,7 +77,7 @@ class TokenBucket(NetworkComponent):
             if self.token < 1:
                 delay = (1 - self.token) / self.rate
             next_depart = max(next_arrival, self.depart) + delay
-        return next_depart, self.idle, (component_idx, self.packet_count, next_component)
+        return next_depart, self.idle, component_idx, self.packet_count, next_component
 
     def peek(self, time):
         # Update the token bucket state.
@@ -175,21 +177,23 @@ class TokenBucketFluid:
 
 class MultiSlopeShaper(NetworkComponent):
 
-    def __init__(self, flow_idx, *args):
+    def __init__(self, flow_idx, *args, internal=False):
         self.flow_idx = flow_idx
         # Set each token bucket from the input list.
         for tb_idx, tb in enumerate(args):
             assert isinstance(tb, TokenBucket), "Every argument passed into MultiSlopeShaper " \
                                                 "must be a TokenBucket instance."
             tb.component_idx = tb_idx
+            tb.internal = True
             tb.next = self
+        self.internal = internal
         self.token_buckets = args
         self.eligible_packets = [[] for _ in range(len(args))]
         self.packet_count = 0
         super().__init__()
         return
 
-    def arrive(self, time, component_idx):
+    def arrive(self, time, component_idx, is_internal):
         # A packet is eligible if released by all the token bucket shapers.
         self.eligible_packets[component_idx].append(time)
         return all(len(ep) > 0 for ep in self.eligible_packets)
@@ -199,7 +203,7 @@ class MultiSlopeShaper(NetworkComponent):
         for ep in self.eligible_packets:
             ep.pop(0)
         self.packet_count += 1
-        return time, True, (self.flow_idx, self.packet_count, self.next)
+        return time, True, self.flow_idx, self.packet_count, self.next
 
     def peek(self, time):
         # Return the maximum number of backlogged packets across all the token buckets.
@@ -225,21 +229,84 @@ class MultiSlopeShaper(NetworkComponent):
         return
 
 
+class InterleavedShaper(NetworkComponent):
+
+    def __init__(self, packet_size, *args):
+        self.packet_size = packet_size
+        self.num_flow = len(packet_size)
+        # Set each multi slope shaper from the input list.
+        self.multi_slope_shapers = [None] * self.num_flow
+        for ms_idx, ms in enumerate(args):
+            assert isinstance(ms, MultiSlopeShaper), "Every argument passed into InterleavedShaper " \
+                                                     "must be a MultiSlopeShaper instance."
+            ms.internal = True
+            self.multi_slope_shapers[ms.flow_idx] = ms
+            ms.next = self
+        self.backlog = []
+        self.packet_count = [0] * self.num_flow
+        super().__init__()
+        return
+
+    def arrive(self, time, component_idx, is_internal):
+        if not is_internal:
+            # Add the packet and its flow index to the backlog.
+            self.backlog.append((component_idx, False))
+            return False
+        else:
+            # Tag the first non-eligible enqueued packet from the specified flow as eligible.
+            packet_idx = self.backlog.index((component_idx, False))
+            self.backlog[packet_idx] = (component_idx, True)
+            # Forward the first packet if eligible.
+            return packet_idx == 0
+
+    def forward(self, time):
+        if len(self.backlog) == 0:
+            # Redundant forward event. Ignore.
+            return time, True, 0, 0, None
+        # Release the packet at the top of the queue.
+        flow_idx, eligible = self.backlog.pop(0)
+        assert eligible, "Non-eligible packet forwarded."
+        self.packet_count[flow_idx] += 1
+        # Examine the next packet.
+        next_eligible = len(self.backlog) > 0 and self.backlog[0][1]
+        return time, not next_eligible, flow_idx, self.packet_count[flow_idx], self.next
+
+    def peek(self, time):
+        # Return the number of backlogged packets.
+        return np.sum(self.packet_size[self.backlog])
+
+    def activate(self, action, time):
+        # Turn on or turn off all the token bucket shapers.
+        for ms in self.multi_slope_shapers:
+            ms.activate(action, time)
+        return
+
+    def reset(self):
+        for ms in self.multi_slope_shapers:
+            if ms is not None:
+                ms.reset()
+        self.backlog = []
+        self.packet_count = [0] * self.num_flow
+        super().reset()
+        return
+
+
 class FIFOScheduler(NetworkComponent):
 
-    def __init__(self, bandwidth, num_flow):
+    def __init__(self, bandwidth, packet_size):
         self.bandwidth = bandwidth
-        self.num_flow = num_flow
+        self.packet_size = packet_size
+        self.num_flow = len(packet_size)
         self.backlog = []
         self.backlog_flow = []
         self.depart = 0
-        self.packet_count = [0] * num_flow
-        self.terminal = [False] * num_flow
+        self.packet_count = [0] * self.num_flow
+        self.terminal = [False] * self.num_flow
         super().__init__()
-        self.next = [None] * num_flow
+        self.next = [None] * self.num_flow
         return
 
-    def arrive(self, time, component_idx):
+    def arrive(self, time, component_idx, is_internal):
         # Add the packet and its flow index to the backlog.
         self.backlog.append(time)
         self.backlog_flow.append(component_idx)
@@ -248,7 +315,7 @@ class FIFOScheduler(NetworkComponent):
     def forward(self, time):
         if len(self.backlog) == 0:
             # Redundant forward event. Ignore.
-            return time, self.idle, (0, 0, None)
+            return time, self.idle, 0, 0, None
         # Update the last packet departure time.
         self.depart = time
         flow_idx, next_component = 0, None
@@ -264,15 +331,16 @@ class FIFOScheduler(NetworkComponent):
             if len(self.backlog) == 0:
                 # Terminate a busy period.
                 self.idle = True
-                return time, self.idle, (flow_idx, self.packet_count[flow_idx], next_component)
+                return time, self.idle, flow_idx, self.packet_count[flow_idx], next_component
         # Examine the next packet.
         next_arrival = self.backlog[0]
-        next_depart = max(next_arrival, self.depart) + 1 / self.bandwidth
-        return next_depart, self.idle, (flow_idx, self.packet_count[flow_idx], next_component)
+        next_flow = self.backlog_flow[0]
+        next_depart = max(next_arrival, self.depart) + self.packet_size[next_flow] / self.bandwidth
+        return next_depart, self.idle, flow_idx, self.packet_count[flow_idx], next_component
 
     def peek(self, time):
-        # Return the number of backlogged packets.
-        return len(self.backlog)
+        # Return the size of backlogged packets.
+        return np.sum(self.packet_size[self.backlog_flow])
 
     def reset(self):
         self.backlog = []
