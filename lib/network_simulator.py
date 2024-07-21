@@ -84,17 +84,18 @@ class NetworkSimulator:
             self.reprofilers = [get_reprofiler(flow_idx) for flow_idx in range(self.num_flow)]
         # Register the link schedulers.
         self.schedulers = []
-        self.link_packetization_delay = []
+        self.link_packetization_delay = np.zeros((self.num_link,), dtype=float)
         for link_idx in range(self.num_link):
             link_flow_mask = flow_path[:, link_idx] > 0
             link_bandwidth = np.sum(reprofiling_rate[link_flow_mask]) * scaling_factor
-            self.link_packetization_delay.append(np.sum(self.packet_size[link_flow_mask]) / link_bandwidth)
+            if np.sum(link_flow_mask) > 0:
+                self.link_packetization_delay[link_idx] = np.sum(self.packet_size[link_flow_mask]) / link_bandwidth
             self.schedulers.append(FIFOScheduler(link_bandwidth, self.packet_size))
         # Compute the expected latency bound (with small tolerance for numerical instability).
         # Compute packetization delay from schedulers.
-        packetization_delay = np.sum(np.array(self.link_packetization_delay) * (flow_path > 0), axis=1)
-        # self.latency_target = (flow_profile[:, 2] + packetization_delay) * (1 + tor)
-        self.latency_target = (reprofiling_delay + packetization_delay) * (1 + tor)
+        packetization_delay = np.sum(self.link_packetization_delay * (flow_path > 0), axis=1)
+        self.latency_target = (flow_profile[:, 2] + packetization_delay) * (1 + tor)
+        # self.latency_target = (reprofiling_delay + packetization_delay) * (1 + tor)
         # Connect the network components.
         for flow_idx, flow_links in enumerate(self.flow_path):
             # Append an empty component to the terminal component.
@@ -167,20 +168,15 @@ class NetworkSimulator:
                 if departed:
                     ms_arrival = is_next_ms and not is_internal_tb
                     interleaved_arrival = is_next_interleaved and not is_internal_ms
+                    if not (is_terminal or ms_arrival):
+                        arrival_event = Event(event.time, EventType.ARRIVAL, flow_idx, next_component,
+                                              internal=is_internal_ms)
+                        heapq.heappush(self.event_pool, arrival_event)
                     if ms_arrival or interleaved_arrival:
                         ms_component = next_component if ms_arrival else next_component.multi_slope_shapers[flow_idx]
                         # Create an arrival event for every token bucket of the multi-slope shaper.
                         for tb in ms_component.token_buckets:
                             arrival_event = Event(event.time, EventType.ARRIVAL, flow_idx, tb)
-                            heapq.heappush(self.event_pool, arrival_event)
-                    if not (is_terminal or ms_arrival):
-                        if isinstance(next_component, InterleavedShaper):
-                            arrival_event = Event(event.time, EventType.ARRIVAL, flow_idx, next_component,
-                                                  internal=is_internal_ms)
-                            heapq.heappush(self.event_pool, arrival_event)
-                        else:
-                            arrival_event = Event(event.time, EventType.ARRIVAL, flow_idx, next_component,
-                                                  internal=is_internal_ms)
                             heapq.heappush(self.event_pool, arrival_event)
                     # Record the packet departure time.
                     if not (is_internal_tb or is_internal_ms):
@@ -194,6 +190,10 @@ class NetworkSimulator:
 
     def generate_arrival_pattern(self):
         arrival_pattern = []
+
+        # Set a large enough awake duration.
+        awake_bottleneck = np.amax(1 / self.token_bucket_profile[:, 0])
+        self.awake_dur = max(self.awake_dur, 1.1 * awake_bottleneck)
 
         def update_pattern(pattern, arrival_time, arrival_traffic, arrival_rate):
             terminate = arrival_time >= self.simulation_time
@@ -352,4 +352,4 @@ class Event:
     internal: bool = False
 
     def __lt__(self, other):
-        return (self.time, self.event_type.value) < (other.time, other.event_type.value)
+        return (self.time, self.event_type.value, self.internal) < (other.time, other.event_type.value, other.internal)
