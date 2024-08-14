@@ -299,6 +299,7 @@ class FIFOScheduler(NetworkComponent):
         self.num_flow = len(packet_size)
         self.backlog = []
         self.backlog_flow = []
+        self.max_backlog_size = 0
         self.depart = 0
         self.packet_count = [0] * self.num_flow
         self.terminal = [False] * self.num_flow
@@ -310,6 +311,7 @@ class FIFOScheduler(NetworkComponent):
         # Add the packet and its flow index to the backlog.
         self.backlog.append(time)
         self.backlog_flow.append(component_idx)
+        self.max_backlog_size = max(self.max_backlog_size, len(self.backlog))
         return self.idle
 
     def forward(self, time):
@@ -345,6 +347,7 @@ class FIFOScheduler(NetworkComponent):
     def reset(self):
         self.backlog = []
         self.backlog_flow = []
+        self.max_backlog_size = 0
         self.depart = 0
         self.packet_count = [0] * self.num_flow
         super().reset()

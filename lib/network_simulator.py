@@ -120,6 +120,7 @@ class NetworkSimulator:
                     self.schedulers[cur_link].next[flow_idx] = self.schedulers[next_link]
         # Set the internal variables.
         self.packet_count = [0] * self.num_flow
+        self.scheduler_max_backlog = [0] * self.num_link
         self.event_pool = []
         # Add packet arrival events to the event pool.
         self.arrival_time = []
@@ -147,7 +148,7 @@ class NetworkSimulator:
                                    range(self.num_flow)]
         else:
             self.departure_time = None
-        self.end_to_end_delay = [[] for _ in range(self.num_flow)]
+        self.end_to_end_delay = [[-1] * len(self.arrival_time[flow_idx]) for flow_idx in range(self.num_flow)]
         return
 
     def simulate(self):
@@ -190,10 +191,13 @@ class NetworkSimulator:
                     # Update the packet count and compute end-to-end latency.
                     if is_terminal:
                         self.packet_count[flow_idx] += 1
-                        self.end_to_end_delay[flow_idx].append(
-                            event.time - self.arrival_time[flow_idx][packet_number - 1])
+                        self.end_to_end_delay[flow_idx][packet_number - 1] = event.time - self.arrival_time[flow_idx][
+                            packet_number - 1]
             elif event.event_type == EventType.SUMMARY:
                 break
+        # Track the maximum backlog size at each link scheduler.
+        for link_idx, scheduler in enumerate(self.schedulers):
+            self.scheduler_max_backlog[link_idx] = scheduler.max_backlog_size
         return
 
     def generate_arrival_pattern(self):
@@ -318,7 +322,8 @@ class NetworkSimulator:
         if self.shaping_mode == "ingress":
             for reprofiler in self.reprofilers:
                 reprofiler.reset()
-        self.packet_count = [0] * len(self.arrival_pattern)
+        self.packet_count = [0] * self.num_flow
+        self.scheduler_max_backlog = [0] * self.num_link
         self.event_pool = []
         # Add packet arrival events to the event pool.
         self.arrival_time = []
@@ -345,7 +350,7 @@ class NetworkSimulator:
                                    range(self.num_flow)]
         else:
             self.departure_time = None
-        self.end_to_end_delay = [[] for _ in range(self.num_flow)]
+        self.end_to_end_delay = [[-1] * len(self.arrival_time[flow_idx]) for flow_idx in range(self.num_flow)]
         return
 
 
