@@ -18,7 +18,7 @@ def setup_axis():
     return ax
 
 
-def plot_delay_statistics(x_data, y_data, labels, output_path, fig_name, percent_format=True):
+def plot_delay_statistics(x_data, y_data, labels, output_path, fig_name, y_err=None, percent_format=True):
     ax = setup_axis()
     x_values, xlabel = x_data
     y_values, ylabel = y_data
@@ -31,12 +31,18 @@ def plot_delay_statistics(x_data, y_data, labels, output_path, fig_name, percent
     colors = ["#7FB3D5", "#F7CAC9", "#A2C8B5", "#D9AFD9", "#D3D3D3", "#FFFF99", "#FFD1DC", "#9AD1D4", "#B19CD9",
               "#B0AFAF"]
     assert len(colors) >= num_line, "Too many lines to visualize."
-    for y_value, color, label in zip(y_values, colors, labels):
-        ax.plot(x_values, y_value, 'o-', color=color, label=label, linewidth=3, markersize=9)
+    if y_err is None:
+        for y_value, color, label in zip(y_values, colors, labels):
+            ax.plot(x_values, y_value, 'o-', color=color, label=label, linewidth=3, markersize=9)
+    else:
+        for y_value, err, color, label in zip(y_values, y_err, colors, labels):
+            ax.errorbar(x_values, y_value, err, fmt='o-', color=color, label=label, linewidth=3, markersize=9,
+                        ecolor=color, elinewidth=3, capsize=6, capthick=3)
     plt.legend(fontsize=35)
     plt.tight_layout()
     plt.savefig(os.path.join(output_path, fig_name + ".png"), bbox_inches='tight')
     plt.clf()
+    return
 
 
 def plot_delay_distribution(end_to_end_delay, output_path, fig_name):
@@ -61,3 +67,4 @@ def plot_delay_distribution(end_to_end_delay, output_path, fig_name):
     plt.tight_layout()
     plt.savefig(os.path.join(output_path, fig_name + ".png"), bbox_inches='tight')
     plt.clf()
+    return

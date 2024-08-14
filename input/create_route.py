@@ -64,7 +64,7 @@ def shortest_path_routing(nodes, links):
     return sd_routes
 
 
-def generate_tandem_route(num_flow, num_hop):
+def generate_tandem_route(num_flow, num_hop, end_host=False):
     """
     Generate flow routes on the tandem network topology (i.e., parking-lot network).
     """
@@ -80,6 +80,20 @@ def generate_tandem_route(num_flow, num_hop):
     net_cross = np.repeat(net_cross, num_flow, axis=0)
     # Combine the main and cross flows.
     flow_routes = np.concatenate((net_main, net_cross), axis=0)
+    if end_host:
+        # Append end devices to each hop.
+        num_flow, num_link = flow_routes.shape
+        end_links = np.zeros((num_flow, 0), dtype=int)
+        hop_traversed = np.amax(flow_routes, axis=1)[:, np.newaxis]
+        flow_joined, flow_departed = np.zeros((num_flow, 1), dtype=int), np.zeros((num_flow, 1), dtype=int)
+        for link_idx in range(num_link):
+            link_flows = flow_routes[:, link_idx:link_idx + 1]
+            flow_joined = np.where(link_flows == 1, 1, 0)
+            end_links = np.concatenate((end_links, flow_joined, flow_departed), axis=1)
+            flow_departed = np.where(link_flows == hop_traversed, hop_traversed + 2, 0)
+        end_links = np.concatenate((end_links, np.zeros((num_flow, 1), dtype=int), flow_departed), axis=1)
+        flow_routes[flow_routes > 0] += 1
+        flow_routes = np.concatenate((flow_routes, end_links), axis=1)
     return flow_routes
 
 
@@ -256,17 +270,18 @@ def save_file(output_path, file_name, flow_routes):
 
 
 if __name__ == "__main__":
-    # num_cross_flow = 5
-    # num_hop = 9
-    num_flow = 10
-    np.random.seed(0)
-    path = f"../data/route/cev/{num_flow}/"
-    for route_idx in range(10):
-        route = generate_cev_net(num_flow)
-        route = route["routes"]
-        save_file(path, f"route{route_idx + 1}", route)
-    # route = generate_tandem_route(num_cross_flow, num_hop)
-    # # The shape of the route matrix should be ((num_hop + 3) * num_flow, num_hop)
-    # num_flow, num_hop = route.shape
-    # path = f"../data/route/{num_flow}/"
-    # save_file(path, "route1", route)
+    num_cross_flow = 2
+    num_hop = 10
+    # num_flow = 10
+    # np.random.seed(0)
+    # path = f"../data/route/cev/{num_flow}/"
+    # for route_idx in range(10):
+    #     route = generate_cev_net(num_flow)
+    #     route = route["routes"]
+    #     save_file(path, f"route{route_idx + 1}", route)
+    # route = generate_tandem_route(num_cross_flow, num_hop, end_host=True)
+    route = np.arange(1, 13).astype(int).reshape((1, 12))
+    # # The shape of the route matrix should be ((num_hop + 3) * num_cross_flow, num_hop)
+    num_flow, num_hop = route.shape
+    path = f"../data/route/tandem/test/{num_flow}_{num_hop}/"
+    save_file(path, "route1", route)

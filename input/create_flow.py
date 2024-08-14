@@ -54,8 +54,13 @@ def generate_random_flow(num_flow):
     flow = np.zeros((num_flow, 3))
     rand_data = np.random.rand(num_flow, 2)
     # Randomly select the rate, burst, and deadline for each flow.
-    flow[:, 0] = np.around(rand_data[:, 0] * (rate_bound[1] - rate_bound[0]) + rate_bound[0], 2)
-    flow[:, 1] = np.around(rand_data[:, 1] * (burst_bound[1] - burst_bound[0]) + burst_bound[0], 2)
+    # flow[:, 0] = np.around(rand_data[:, 0] * (rate_bound[1] - rate_bound[0]) + rate_bound[0], 2)
+    # flow[:, 1] = np.around(rand_data[:, 1] * (burst_bound[1] - burst_bound[0]) + burst_bound[0], 2)
+
+    rate_class = burst_class = np.array([5, 10, 20, 25, 40, 50, 80, 100])
+    flow[:, 0] = rate_class[np.random.randint(len(rate_class), size=num_flow)]
+    flow[:, 1] = burst_class[np.random.randint(len(burst_class), size=num_flow)]
+
     flow[:, 2] = deadline_class[np.random.randint(len(deadline_class), size=num_flow)]
     return flow
 
@@ -128,16 +133,17 @@ def save_file(output_path, file_name, flow):
 
 
 if __name__ == "__main__":
-    num_flow = 100
+    num_flow = 26
     np.random.seed(0)
     # flow_data = np.array([50, 50, 0.1]) * np.ones((num_flow, 3))
     # save_file(path, "flow1", flow_data)
-    path = f"../data/flow/cev/{num_flow}/"
-    path_route = f"../data/route/cev/{num_flow}/"
-    for flow_idx in range(10):
-        route_data = np.load(os.path.join(path_route, f"route{flow_idx + 1}.npy"))
-        flow_num = len(route_data)
-        flow_data = generate_tsn_flow(flow_num)
-        save_file(path, f"flow{flow_idx + 1}", flow_data)
-    # for file_idx in range(10):
-    #     save_file(path, f"flow{file_idx + 1}", generate_random_flow(num_flow))
+    path = f"../data/flow/tandem/rounded/{num_flow}/"
+    # path = f"../data/flow/cev/{num_flow}/"
+    # path_route = f"../data/route/cev/{num_flow}/"
+    # for flow_idx in range(10):
+    #     route_data = np.load(os.path.join(path_route, f"route{flow_idx + 1}.npy"))
+    #     flow_num = len(route_data)
+    #     flow_data = generate_tsn_flow(flow_num)
+    #     save_file(path, f"flow{flow_idx + 1}", flow_data)
+    for file_idx in range(10):
+        save_file(path, f"flow{file_idx + 1}", generate_random_flow(num_flow))

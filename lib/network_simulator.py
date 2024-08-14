@@ -13,8 +13,8 @@ class NetworkSimulator:
     """A network simulator supporting several types of traffic shaping and scheduling policy."""
 
     def __init__(self, flow_profile, flow_path, reprofiling_delay, simulation_time=1000, shaping_mode="per_flow",
-                 arrival_pattern_type="sync_burst", awake_dur=None, arrival_pattern=None, scaling_factor=1.0,
-                 packet_size=1, tor=0.003):
+                 arrival_pattern_type="sync_burst", awake_dur=None, arrival_pattern=None, keep_per_hop_departure=True,
+                 scaling_factor=1.0, packet_size=1, tor=0.003):
         flow_profile = np.array(flow_profile)
         flow_path = np.array(flow_path)
         reprofiling_delay = np.array(reprofiling_delay)
@@ -31,6 +31,7 @@ class NetworkSimulator:
         assert valid_pattern, "Please choose an arrival pattern type among 'sync_burst', 'sync_smooth', and 'async'."
         self.arrival_pattern_type = arrival_pattern_type
         self.awake_dur = simulation_time / 100 if awake_dur is None else awake_dur
+        self.keep_per_hop_departure = keep_per_hop_departure
         self.scaling_factor = scaling_factor
         if isinstance(packet_size, Iterable):
             assert len(packet_size) == self.num_flow, "Please set the packet size either as a single value, " \
@@ -140,8 +141,13 @@ class NetworkSimulator:
                     first_scheduler = self.schedulers[self.flow_path[flow_idx][0]]
                     event = Event(arrival, EventType.ARRIVAL, flow_idx, first_scheduler)
                     heapq.heappush(self.event_pool, event)
-        self.departure_time = [[[] for _ in range(len(self.arrival_time[flow_idx]))] for flow_idx in
-                               range(self.num_flow)]
+        # Keep track of the packet departure time at every hop if specified.
+        if keep_per_hop_departure:
+            self.departure_time = [[[] for _ in range(len(self.arrival_time[flow_idx]))] for flow_idx in
+                                   range(self.num_flow)]
+        else:
+            self.departure_time = None
+        self.end_to_end_delay = [[] for _ in range(self.num_flow)]
         return
 
     def simulate(self):
@@ -179,11 +185,13 @@ class NetworkSimulator:
                             arrival_event = Event(event.time, EventType.ARRIVAL, flow_idx, tb)
                             heapq.heappush(self.event_pool, arrival_event)
                     # Record the packet departure time.
-                    if not (is_internal_tb or is_internal_ms):
+                    if not (is_internal_tb or is_internal_ms) and self.keep_per_hop_departure:
                         self.departure_time[flow_idx][packet_number - 1].append(event.time)
                     # Update the packet count and compute end-to-end latency.
                     if is_terminal:
                         self.packet_count[flow_idx] += 1
+                        self.end_to_end_delay[flow_idx].append(
+                            event.time - self.arrival_time[flow_idx][packet_number - 1])
             elif event.event_type == EventType.SUMMARY:
                 break
         return
@@ -332,8 +340,12 @@ class NetworkSimulator:
                     first_scheduler = self.schedulers[self.flow_path[flow_idx][0]]
                     event = Event(arrival, EventType.ARRIVAL, flow_idx, first_scheduler)
                     heapq.heappush(self.event_pool, event)
-        self.departure_time = [[[] for _ in range(len(self.arrival_time[flow_idx]))] for flow_idx in
-                               range(self.num_flow)]
+        if self.keep_per_hop_departure:
+            self.departure_time = [[[] for _ in range(len(self.arrival_time[flow_idx]))] for flow_idx in
+                                   range(self.num_flow)]
+        else:
+            self.departure_time = None
+        self.end_to_end_delay = [[] for _ in range(self.num_flow)]
         return
 
 
