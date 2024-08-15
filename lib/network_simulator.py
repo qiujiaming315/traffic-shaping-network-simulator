@@ -119,7 +119,6 @@ class NetworkSimulator:
                 for cur_link, next_link in zip(flow_links[:-1], flow_links[1:]):
                     self.schedulers[cur_link].next[flow_idx] = self.schedulers[next_link]
         # Set the internal variables.
-        self.packet_count = [0] * self.num_flow
         self.scheduler_max_backlog = [0] * self.num_link
         self.event_pool = []
         # Add packet arrival events to the event pool.
@@ -127,7 +126,7 @@ class NetworkSimulator:
         for flow_idx, fluid_arrival in enumerate(self.arrival_pattern):
             flow_arrival = self.token_buckets[flow_idx].forward(fluid_arrival)
             self.arrival_time.append(flow_arrival)
-            for arrival in flow_arrival:
+            for packet_number, arrival in enumerate(flow_arrival):
                 if shaping_mode in ["per_flow", "interleaved", "ingress"]:
                     if shaping_mode == "per_flow":
                         first_reprofiler = self.reprofilers[(self.flow_path[flow_idx][0], flow_idx)]
@@ -136,11 +135,11 @@ class NetworkSimulator:
                     else:
                         first_reprofiler = self.reprofilers[flow_idx]
                     for tb in first_reprofiler.token_buckets:
-                        event = Event(arrival, EventType.ARRIVAL, flow_idx, tb)
+                        event = Event(arrival, EventType.ARRIVAL, flow_idx, packet_number, tb)
                         heapq.heappush(self.event_pool, event)
                 if shaping_mode == "none":
                     first_scheduler = self.schedulers[self.flow_path[flow_idx][0]]
-                    event = Event(arrival, EventType.ARRIVAL, flow_idx, first_scheduler)
+                    event = Event(arrival, EventType.ARRIVAL, flow_idx, packet_number, first_scheduler)
                     heapq.heappush(self.event_pool, event)
         # Keep track of the packet departure time at every hop if specified.
         if keep_per_hop_departure:
@@ -156,7 +155,7 @@ class NetworkSimulator:
             event = heapq.heappop(self.event_pool)
             if event.event_type == EventType.ARRIVAL:
                 # Start a busy period by creating a forward event if the component is idle upon arrival.
-                if event.component.arrive(event.time, event.flow_idx, event.internal):
+                if event.component.arrive(event.time, event.packet_number, event.flow_idx, event.internal):
                     forward_event = Event(event.time, EventType.FORWARD, component=event.component)
                     heapq.heappush(self.event_pool, forward_event)
             elif event.event_type == EventType.FORWARD:
@@ -176,23 +175,22 @@ class NetworkSimulator:
                     ms_arrival = is_next_ms and not is_internal_tb
                     interleaved_arrival = is_next_interleaved and not is_internal_ms
                     if not (is_terminal or ms_arrival):
-                        arrival_event = Event(event.time, EventType.ARRIVAL, flow_idx, next_component,
+                        arrival_event = Event(event.time, EventType.ARRIVAL, flow_idx, packet_number, next_component,
                                               internal=is_internal_ms)
                         heapq.heappush(self.event_pool, arrival_event)
                     if ms_arrival or interleaved_arrival:
                         ms_component = next_component if ms_arrival else next_component.multi_slope_shapers[flow_idx]
                         # Create an arrival event for every token bucket of the multi-slope shaper.
                         for tb in ms_component.token_buckets:
-                            arrival_event = Event(event.time, EventType.ARRIVAL, flow_idx, tb)
+                            arrival_event = Event(event.time, EventType.ARRIVAL, flow_idx, packet_number, tb)
                             heapq.heappush(self.event_pool, arrival_event)
                     # Record the packet departure time.
                     if not (is_internal_tb or is_internal_ms) and self.keep_per_hop_departure:
-                        self.departure_time[flow_idx][packet_number - 1].append(event.time)
+                        self.departure_time[flow_idx][packet_number].append(event.time)
                     # Update the packet count and compute end-to-end latency.
                     if is_terminal:
-                        self.packet_count[flow_idx] += 1
-                        self.end_to_end_delay[flow_idx][packet_number - 1] = event.time - self.arrival_time[flow_idx][
-                            packet_number - 1]
+                        self.end_to_end_delay[flow_idx][packet_number] = event.time - self.arrival_time[flow_idx][
+                            packet_number]
             elif event.event_type == EventType.SUMMARY:
                 break
         # Track the maximum backlog size at each link scheduler.
@@ -322,7 +320,6 @@ class NetworkSimulator:
         if self.shaping_mode == "ingress":
             for reprofiler in self.reprofilers:
                 reprofiler.reset()
-        self.packet_count = [0] * self.num_flow
         self.scheduler_max_backlog = [0] * self.num_link
         self.event_pool = []
         # Add packet arrival events to the event pool.
@@ -330,7 +327,7 @@ class NetworkSimulator:
         for flow_idx, fluid_arrival in enumerate(self.arrival_pattern):
             flow_arrival = self.token_buckets[flow_idx].forward(fluid_arrival)
             self.arrival_time.append(flow_arrival)
-            for arrival in flow_arrival:
+            for packet_number, arrival in enumerate(flow_arrival):
                 if self.shaping_mode in ["per_flow", "interleaved", "ingress"]:
                     if self.shaping_mode == "per_flow":
                         first_reprofiler = self.reprofilers[(self.flow_path[flow_idx][0], flow_idx)]
@@ -339,11 +336,11 @@ class NetworkSimulator:
                     else:
                         first_reprofiler = self.reprofilers[flow_idx]
                     for tb in first_reprofiler.token_buckets:
-                        event = Event(arrival, EventType.ARRIVAL, flow_idx, tb)
+                        event = Event(arrival, EventType.ARRIVAL, flow_idx, packet_number, tb)
                         heapq.heappush(self.event_pool, event)
                 if self.shaping_mode == "none":
                     first_scheduler = self.schedulers[self.flow_path[flow_idx][0]]
-                    event = Event(arrival, EventType.ARRIVAL, flow_idx, first_scheduler)
+                    event = Event(arrival, EventType.ARRIVAL, flow_idx, packet_number, first_scheduler)
                     heapq.heappush(self.event_pool, event)
         if self.keep_per_hop_departure:
             self.departure_time = [[[] for _ in range(len(self.arrival_time[flow_idx]))] for flow_idx in
@@ -365,6 +362,7 @@ class Event:
     time: float
     event_type: EventType
     flow_idx: int = 0
+    packet_number: int = 0
     component: NetworkComponent = NetworkComponent()
     internal: bool = False
 
