@@ -285,9 +285,10 @@ class InterleavedShaper(NetworkComponent):
 
 class FIFOScheduler(NetworkComponent):
 
-    def __init__(self, bandwidth, packet_size):
+    def __init__(self, bandwidth, packet_size, buffer_size=None):
         self.bandwidth = bandwidth
         self.packet_size = packet_size
+        self.buffer_size = buffer_size
         self.num_flow = len(packet_size)
         self.backlog = []
         self.backlog_flow = []
@@ -299,10 +300,16 @@ class FIFOScheduler(NetworkComponent):
         return
 
     def arrive(self, time, packet_number, component_idx, is_internal):
+        # Check if the buffer has enough space to accommodate the packet.
+        buffer_available = self.buffer_size is None or self.buffer_size >= self.packet_size[component_idx] + self.peek(
+            time)
         # Add the packet and its flow index to the backlog.
-        self.backlog.append((time, packet_number))
-        self.backlog_flow.append(component_idx)
-        self.max_backlog_size = max(self.max_backlog_size, len(self.backlog))
+        if buffer_available:
+            self.backlog.append((time, packet_number))
+            self.backlog_flow.append(component_idx)
+            self.max_backlog_size = max(self.max_backlog_size, self.peek(time))
+        else:
+            pass
         return self.idle
 
     def forward(self, time):

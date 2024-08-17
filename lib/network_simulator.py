@@ -13,8 +13,8 @@ class NetworkSimulator:
     """A network simulator supporting several types of traffic shaping and scheduling policy."""
 
     def __init__(self, flow_profile, flow_path, reprofiling_delay, simulation_time=1000, shaping_mode="per_flow",
-                 arrival_pattern_type="sync_burst", awake_dur=None, arrival_pattern=None, keep_per_hop_departure=True,
-                 scaling_factor=1.0, packet_size=1, tor=0.003):
+                 buffer_bound="infinite", arrival_pattern_type="sync_burst", awake_dur=None, arrival_pattern=None,
+                 keep_per_hop_departure=True, scaling_factor=1.0, packet_size=1, tor=0.003):
         flow_profile = np.array(flow_profile)
         flow_path = np.array(flow_path)
         reprofiling_delay = np.array(reprofiling_delay)
@@ -25,8 +25,11 @@ class NetworkSimulator:
         self.reprofiling_delay = reprofiling_delay
         self.simulation_time = simulation_time
         valid_mode = shaping_mode in ["per_flow", "interleaved", "ingress", "none"]
-        assert valid_mode, "Please choose a shaping mode among 'per_flow', 'interleaved', 'ingress', 'none'."
+        assert valid_mode, "Please choose a shaping mode among 'per_flow', 'interleaved', 'ingress', and 'none'."
         self.shaping_mode = shaping_mode
+        valid_buffer = buffer_bound in ["infinite", "with_shaping"]
+        assert valid_buffer, "Please choose a buffer bound between 'infinite' and 'with_shaping'."
+        self.buffer_bound = buffer_bound
         valid_pattern = arrival_pattern_type in ["sync_burst", "sync_smooth", "async"] or arrival_pattern is not None
         assert valid_pattern, "Please choose an arrival pattern type among 'sync_burst', 'sync_smooth', and 'async'."
         self.arrival_pattern_type = arrival_pattern_type
@@ -89,9 +92,14 @@ class NetworkSimulator:
         for link_idx in range(self.num_link):
             link_flow_mask = flow_path[:, link_idx] > 0
             link_bandwidth = np.sum(reprofiling_rate[link_flow_mask]) * scaling_factor
+            link_buffer = None
             if np.sum(link_flow_mask) > 0:
                 self.link_packetization_delay[link_idx] = np.sum(self.packet_size[link_flow_mask]) / link_bandwidth
-            self.schedulers.append(FIFOScheduler(link_bandwidth, self.packet_size))
+                if buffer_bound == "with_shaping":
+                    # Add a maximum packet size to avoid buffer overflow due to numerical issues.
+                    link_buffer = (np.sum(self.packet_size[link_flow_mask]) + np.amax(
+                        self.packet_size[link_flow_mask])) * (1 + tor)
+            self.schedulers.append(FIFOScheduler(link_bandwidth, self.packet_size, buffer_size=link_buffer))
         # Compute the expected latency bound (with small tolerance for numerical instability).
         # Compute packetization delay from schedulers.
         packetization_delay = np.sum(self.link_packetization_delay * (flow_path > 0), axis=1)
