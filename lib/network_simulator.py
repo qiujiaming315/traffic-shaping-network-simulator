@@ -5,8 +5,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import Enum
 
-from lib.network_component import NetworkComponent, TokenBucketFluid, TokenBucket, MultiSlopeShaper, InterleavedShaper, \
-    FIFOScheduler
+from lib.traffic_shapers import NetworkComponent, TokenBucketFluid, TokenBucket, MultiSlopeShaper, InterleavedShaper
+from lib.schedulers import FIFOScheduler
 
 
 class NetworkSimulator:
