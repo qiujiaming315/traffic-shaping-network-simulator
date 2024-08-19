@@ -268,12 +268,6 @@ class InterleavedShaper(NetworkComponent):
         # Return the number of backlogged packets.
         return np.sum(self.packet_size[self.backlog])
 
-    def activate(self, action, time):
-        # Turn on or turn off all the token bucket shapers.
-        for ms in self.multi_slope_shapers:
-            ms.activate(action, time)
-        return
-
     def reset(self):
         for ms in self.multi_slope_shapers:
             if ms is not None:
