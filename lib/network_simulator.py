@@ -115,7 +115,7 @@ class NetworkSimulator:
                 self.schedulers.append(
                     SCEDScheduler(link_bandwidth, self.packet_size,
                                   *[(flow_idx, get_reprofiler_sced(flow_idx)) for flow_idx in
-                                    np.arange(self.num_link)[link_flow_mask]], buffer_size=link_buffer))
+                                    np.arange(self.num_flow)[link_flow_mask]], buffer_size=link_buffer))
         # Compute the expected latency bound (with small tolerance for numerical instability).
         # Compute packetization delay from schedulers.
         packetization_delay = np.sum(self.link_packetization_delay * (flow_path > 0), axis=1)

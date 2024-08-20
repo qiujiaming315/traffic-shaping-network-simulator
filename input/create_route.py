@@ -270,18 +270,20 @@ def save_file(output_path, file_name, flow_routes):
 
 
 if __name__ == "__main__":
-    num_cross_flow = 2
-    num_hop = 10
-    # num_flow = 10
-    # np.random.seed(0)
+    # num_cross_flow = 2
+    # num_hop = 10
+    num_flow = 50
+    np.random.seed(0)
+    path = f"../data/route/google/{num_flow}/"
     # path = f"../data/route/cev/{num_flow}/"
-    # for route_idx in range(10):
-    #     route = generate_cev_net(num_flow)
-    #     route = route["routes"]
-    #     save_file(path, f"route{route_idx + 1}", route)
+    for route_idx in range(10):
+        # route = generate_cev_net(num_flow)
+        # route = route["routes"]
+        route = generate_google_net(num_flow)
+        save_file(path, f"route{route_idx + 1}", route)
     # route = generate_tandem_route(num_cross_flow, num_hop, end_host=True)
-    route = np.arange(1, 13).astype(int).reshape((1, 12))
+    # route = np.arange(1, 13).astype(int).reshape((1, 12))
     # # The shape of the route matrix should be ((num_hop + 3) * num_cross_flow, num_hop)
-    num_flow, num_hop = route.shape
-    path = f"../data/route/tandem/test/{num_flow}_{num_hop}/"
-    save_file(path, "route1", route)
+    # num_flow, num_hop = route.shape
+    # path = f"../data/route/tandem/test/{num_flow}_{num_hop}/"
+    # save_file(path, "route1", route)
