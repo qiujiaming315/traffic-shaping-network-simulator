@@ -54,6 +54,7 @@ class NetworkSimulator:
         reprofiling_burst = flow_profile[:, 1] - flow_profile[:, 0] * reprofiling_delay
         token_bucket_reprofiling_rate = reprofiling_rate / self.packet_size
         token_bucket_reprofiling_burst = reprofiling_burst / self.packet_size + 1
+        remaining_delay = (flow_profile[:, 2] - reprofiling_delay) / np.sum(flow_path > 0, axis=1)
 
         def get_reprofiler(flow_idx):
             return MultiSlopeShaper(flow_idx, TokenBucket(self.token_bucket_profile[flow_idx, 0],
@@ -113,7 +114,7 @@ class NetworkSimulator:
                                                 TokenBucketSCED(token_bucket_reprofiling_rate[flow_idx], 1))
 
                 self.schedulers.append(
-                    SCEDScheduler(link_bandwidth, self.packet_size,
+                    SCEDScheduler(link_bandwidth, self.packet_size, remaining_delay,
                                   *[(flow_idx, get_reprofiler_sced(flow_idx)) for flow_idx in
                                     np.arange(self.num_flow)[link_flow_mask]], buffer_size=link_buffer))
         # Compute the expected latency bound (with small tolerance for numerical instability).

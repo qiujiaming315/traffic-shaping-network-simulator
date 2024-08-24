@@ -68,3 +68,16 @@ def plot_delay_distribution(end_to_end_delay, output_path, fig_name):
     plt.savefig(os.path.join(output_path, fig_name + ".png"), bbox_inches='tight')
     plt.clf()
     return
+
+def plot_statistics_bar(data, names, title, output_path, fig_name, percent_format=True):
+    ax = setup_axis()
+    if percent_format:
+        ax.yaxis.set_major_formatter(mtick.PercentFormatter())
+    ax.bar(np.arange(len(data)), data, width=0.5, color='blue')
+    ax.set_xticks(np.arange(len(data)))
+    ax.set_xticklabels(names, size=20)
+    ax.set_title(title, color='#333333', pad=20, size=45)
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_path, fig_name + ".png"), bbox_inches='tight')
+    plt.clf()
+    return

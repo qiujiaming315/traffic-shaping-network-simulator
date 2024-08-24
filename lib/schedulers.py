@@ -146,18 +146,20 @@ class MultiSlopeShaperSCED:
 class SCEDScheduler(Scheduler):
     """SCED scheduler."""
 
-    def __init__(self, bandwidth, packet_size, *args, buffer_size=None):
+    def __init__(self, bandwidth, packet_size, offset, *args, buffer_size=None):
         super().__init__(bandwidth, packet_size, buffer_size=buffer_size)
         self.multi_slope_shapers = [MultiSlopeShaperSCED()] * self.num_flow
         for flow_idx, ms in args:
             assert isinstance(ms, MultiSlopeShaperSCED), "Every argument passed into SCEDScheduler " \
                                                          "must be a MultiSlopeShaperSCED instance."
             self.multi_slope_shapers[flow_idx] = ms
+        self.offset = offset
         return
 
     def add_packet(self, time, packet_number, component_idx):
         # Sort packet according to their eligibility time.
         packet_eligibility_time = self.multi_slope_shapers[component_idx].get_eligibility_time(time)
+        packet_eligibility_time += self.offset[component_idx]
         new_packet = Packet(packet_eligibility_time, time, packet_number, component_idx)
         heapq.heappush(self.backlog, new_packet)
         return

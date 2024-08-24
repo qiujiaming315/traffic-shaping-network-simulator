@@ -133,19 +133,19 @@ def save_file(output_path, file_name, flow):
 
 
 if __name__ == "__main__":
-    num_flow = 50
+    num_flow = 5
     np.random.seed(0)
     # flow_data = np.array([50, 50, 0.1]) * np.ones((num_flow, 3))
     # save_file(path, "flow1", flow_data)
     # path = f"../data/flow/tandem/rounded/{num_flow}/"
-    path = f"../data/flow/google/{num_flow}/"
-    # path = f"../data/flow/cev/{num_flow}/"
-    # path_route = f"../data/route/cev/{num_flow}/"
+    # path = f"../data/flow/google/{num_flow}/"
+    path = f"../data/flow/cev/{num_flow}/"
+    path_route = f"../data/route/cev/{num_flow}/"
     for flow_idx in range(10):
-        # route_data = np.load(os.path.join(path_route, f"route{flow_idx + 1}.npy"))
-        # flow_num = len(route_data)
-        # flow_data = generate_tsn_flow(flow_num)
-        flow_data = generate_fb_flow(num_flow)
+        route_data = np.load(os.path.join(path_route, f"route{flow_idx + 1}.npy"))
+        flow_num = len(route_data)
+        flow_data = generate_tsn_flow(flow_num)
+        # flow_data = generate_fb_flow(num_flow)
         save_file(path, f"flow{flow_idx + 1}", flow_data)
     # for file_idx in range(10):
     #     save_file(path, f"flow{file_idx + 1}", generate_random_flow(num_flow))
