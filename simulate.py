@@ -6,7 +6,6 @@ import time
 from lib.network_simulator import NetworkSimulator
 from viz.packet_delay_demo import plot_delay_distribution
 
-
 if __name__ == '__main__':
     """An example use case of the traffic shaping network simulator."""
     # Specify the path to the input data (flow profile + flow routes) of the simulation. Replace with your own path.
@@ -25,8 +24,9 @@ if __name__ == '__main__':
     # Establish the simulator. Make your own choice of the input parameters.
     simulator = NetworkSimulator(flow_profile, flow_route, shaping_delay, simulation_time=100.0,
                                  scheduling_policy="fifo", shaping_mode="per_flow", buffer_bound="infinite",
-                                 arrival_pattern_type="sync_burst", awake_dur=10.0, arrival_pattern=None,
-                                 keep_per_hop_departure=True, scaling_factor=1.0, packet_size=1)
+                                 arrival_pattern_type="sync_burst", awake_dur=10.0, awake_dist="exponential",
+                                 sync_jitter=0, arrival_pattern=None, keep_per_hop_departure=True, scaling_factor=1.0,
+                                 packet_size=1)
     # Start the simulation.
     start = time.time()
     simulator.simulate()

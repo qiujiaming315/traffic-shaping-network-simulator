@@ -133,18 +133,23 @@ def save_file(output_path, file_name, flow):
 
 
 if __name__ == "__main__":
-    num_flow = 5
+    num_flow = 100
     np.random.seed(0)
     # flow_data = np.array([50, 50, 0.1]) * np.ones((num_flow, 3))
     # save_file(path, "flow1", flow_data)
+
+    # path = f"../data/flow/ingress_killer/"
+    # flow_data = np.array([[50, 50, 1]])
+    # enemy_flow = np.array([0.5, 1, 100]) * np.ones((100, 3))
+    # flow_data = np.concatenate((flow_data, enemy_flow), axis=0)
+    # flow_data = np.concatenate((flow_data, np.array([[10, 10, 1]])), axis=0)
+    # save_file(path, "flow1", flow_data)
+
     # path = f"../data/flow/tandem/rounded/{num_flow}/"
     # path = f"../data/flow/google/{num_flow}/"
     path = f"../data/flow/cev/{num_flow}/"
-    path_route = f"../data/route/cev/{num_flow}/"
-    for flow_idx in range(10):
-        route_data = np.load(os.path.join(path_route, f"route{flow_idx + 1}.npy"))
-        flow_num = len(route_data)
-        flow_data = generate_tsn_flow(flow_num)
+    for flow_idx in range(100):
+        flow_data = generate_tsn_flow(num_flow)
         # flow_data = generate_fb_flow(num_flow)
         save_file(path, f"flow{flow_idx + 1}", flow_data)
     # for file_idx in range(10):

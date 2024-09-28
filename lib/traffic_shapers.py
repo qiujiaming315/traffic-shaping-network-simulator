@@ -35,6 +35,7 @@ class TokenBucket(NetworkComponent):
         self.internal = internal
         self.active = True
         self.backlog = []
+        self.max_backlog_size = 0
         self.token = burst
         self.depart = 0
         super().__init__()
@@ -42,6 +43,7 @@ class TokenBucket(NetworkComponent):
 
     def arrive(self, time, packet_number, component_idx, is_internal):
         self.backlog.append((time, packet_number))
+        self.max_backlog_size = max(self.max_backlog_size, len(self.backlog))
         return self.idle
 
     def forward(self, time):
@@ -94,6 +96,7 @@ class TokenBucket(NetworkComponent):
     def reset(self):
         self.active = True
         self.backlog = []
+        self.max_backlog_size = 0
         self.token = self.burst
         self.depart = 0
         super().reset()
@@ -238,6 +241,7 @@ class InterleavedShaper(NetworkComponent):
             self.multi_slope_shapers[ms.flow_idx] = ms
             ms.next = self
         self.backlog = []
+        self.max_backlog_size = 0
         super().__init__()
         return
 
@@ -245,6 +249,7 @@ class InterleavedShaper(NetworkComponent):
         if not is_internal:
             # Add the packet and its flow index to the backlog.
             self.backlog.append((component_idx, packet_count, False))
+            self.max_backlog_size = max(self.max_backlog_size, self.peek(time))
             return False
         else:
             # Tag the specified non-eligible enqueued packet as eligible.
@@ -265,13 +270,15 @@ class InterleavedShaper(NetworkComponent):
         return time, not next_eligible, flow_idx, packet_number, self.next
 
     def peek(self, time):
-        # Return the number of backlogged packets.
-        return np.sum(self.packet_size[self.backlog])
+        # Return the size of backlogged packets.
+        backlog_flow = [packet[0] for packet in self.backlog]
+        return np.sum(self.packet_size[backlog_flow])
 
     def reset(self):
         for ms in self.multi_slope_shapers:
             if ms is not None:
                 ms.reset()
         self.backlog = []
+        self.max_backlog_size = 0
         super().reset()
         return

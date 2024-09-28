@@ -131,7 +131,8 @@ def generate_dc_net(net_nodes, net_links, num_pair, source_edge=True, dest_edge=
     sd_route = np.zeros((1, 2 * len(net_links)), dtype=int)
     flow_routes_pruned = np.zeros((0, 2 * (len(net_links) - np.sum(net_nodes))), dtype=int)
     sd_route_pruned = np.zeros((1, 2 * (len(net_links) - np.sum(net_nodes))), dtype=int)
-    min_hop = 4 if prune else 2
+    # min_hop = 4 if prune else 2
+    min_hop = 3 if prune else 1
     # Select multiple (num_pair) S-D pairs for the network.
     for _ in range(num_pair):
         sd_route[:], sd_route_pruned[:] = 0, 0
@@ -194,7 +195,8 @@ def generate_tsn_net(net_nodes, net_links, num_app, source_edge=True, dest_edge=
     # Create the flow routes.
     flow_routes = np.zeros((0, 2 * len(net_links)), dtype=int)
     flow_routes_pruned = np.zeros((0, 2 * (len(net_links) - np.sum(net_nodes))), dtype=int)
-    min_hop = 4 if prune else 2
+    # min_hop = 4 if prune else 2
+    min_hop = 3 if prune else 1
     # Select multiple (num_app) applications for the network.
     cast_pattern = np.random.choice(3, size=num_app)
     app_dest_num = list()
@@ -265,25 +267,37 @@ def save_file(output_path, file_name, flow_routes):
     :param flow_routes: the flow routes.
     """
     Path(output_path).mkdir(parents=True, exist_ok=True)
-    np.save(os.path.join(output_path, file_name + ".npy"), flow_routes)
+    if isinstance(flow_routes, dict):
+        np.savez(os.path.join(output_path, file_name + ".npz"), **flow_routes)
+    else:
+        np.save(os.path.join(output_path, file_name + ".npy"), flow_routes)
     return
 
 
 if __name__ == "__main__":
     # num_cross_flow = 2
     # num_hop = 10
-    num_flow = 5
+    num_flow = 100
     np.random.seed(0)
-    # path = f"../data/route/google/{num_flow}/"
-    path = f"../data/route/cev/{num_flow}/"
-    for route_idx in range(10):
-        route = generate_cev_net(num_flow)
-        route = route["routes"]
+    # path = f"../data/route/google/pruned/{num_flow}/"
+    path = f"../data/route/cev/pruned/{num_flow}/"
+    for route_idx in range(100):
+        route = generate_cev_net(num_flow, prune=True)
+        route = {"app_dest_num": route["app_dest_num"], "routes": route["routes_pruned"]}
+        # route = route["routes"]
         # route = generate_google_net(num_flow)
+        # route = generate_google_net(num_flow, prune=True)
+        # route = route["routes_pruned"]
         save_file(path, f"route{route_idx + 1}", route)
     # route = generate_tandem_route(num_cross_flow, num_hop, end_host=True)
     # route = np.arange(1, 13).astype(int).reshape((1, 12))
+
+    # route = np.array([[1, 2]])
+    # enemy_route = np.array([1, 0]) * np.ones((100, 2))
+    # route = np.concatenate((route, enemy_route), axis=0)
+    # route = np.concatenate((route, np.array([[0, 1]])), axis=0).astype(int)
+
     # # The shape of the route matrix should be ((num_hop + 3) * num_cross_flow, num_hop)
     # num_flow, num_hop = route.shape
-    # path = f"../data/route/tandem/test/{num_flow}_{num_hop}/"
+    # path = f"../data/route/ingress_killer/"
     # save_file(path, "route1", route)

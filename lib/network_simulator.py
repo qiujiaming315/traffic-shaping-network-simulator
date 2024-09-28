@@ -14,8 +14,8 @@ class NetworkSimulator:
 
     def __init__(self, flow_profile, flow_path, reprofiling_delay, simulation_time=1000, scheduling_policy="fifo",
                  shaping_mode="per_flow", buffer_bound="infinite", arrival_pattern_type="sync_burst", awake_dur=None,
-                 awake_dist="exponential", arrival_pattern=None, keep_per_hop_departure=True, scaling_factor=1.0,
-                 packet_size=1, tor=0.003):
+                 awake_dist="exponential", sync_jitter=0, arrival_pattern=None, keep_per_hop_departure=True,
+                 scaling_factor=1.0, packet_size=1, tor=0.003):
         flow_profile = np.array(flow_profile)
         flow_path = np.array(flow_path)
         reprofiling_delay = np.array(reprofiling_delay)
@@ -43,6 +43,7 @@ class NetworkSimulator:
         self.awake_dur = simulation_time / 100 if awake_dur is None else awake_dur
         if self.awake_dist == "exponential":
             assert self.awake_dur > 0, "Please set a positive awake duration if the distribution is exponential."
+        self.sync_jitter = sync_jitter
         self.keep_per_hop_departure = keep_per_hop_departure
         self.scaling_factor = scaling_factor
         if isinstance(packet_size, Iterable):
@@ -156,6 +157,11 @@ class NetworkSimulator:
         # Set the internal variables.
         self.packet_count = [0] * self.num_flow
         self.scheduler_max_backlog = [0] * self.num_link
+        if scheduling_policy == "fifo":
+            if shaping_mode in ["per_flow", "interleaved", "ingress"]:
+                self.reprofiler_max_backlog = [0] * len(self.reprofilers)
+            if shaping_mode == "interleaved":
+                self.ingress_reprofiler_max_backlog = [0] * len(self.ingress_reprofilers)
         self.event_pool = []
         # Add packet arrival events to the event pool.
         self.arrival_time = []
@@ -233,6 +239,25 @@ class NetworkSimulator:
         # Track the maximum backlog size at each link scheduler.
         for link_idx, scheduler in enumerate(self.schedulers):
             self.scheduler_max_backlog[link_idx] = scheduler.max_backlog_size
+        # Track the maximum backlog size at each reprofiler.
+        if self.scheduling_policy == "fifo":
+            if self.shaping_mode == "per_flow":
+                for idx, key in enumerate(self.reprofilers.keys()):
+                    flow_idx = key[1]
+                    self.reprofiler_max_backlog[idx] = max(
+                        tb.max_backlog_size for tb in self.reprofilers[key].token_buckets) * self.packet_size[flow_idx]
+            elif self.shaping_mode == "interleaved":
+                for flow_idx in range(self.num_flow):
+                    self.ingress_reprofiler_max_backlog[flow_idx] = max(
+                        tb.max_backlog_size for tb in self.ingress_reprofilers[flow_idx].token_buckets) * \
+                                                                    self.packet_size[flow_idx]
+                for idx, key in enumerate(self.reprofilers.keys()):
+                    self.reprofiler_max_backlog[idx] = self.reprofilers[key].max_backlog_size
+            elif self.shaping_mode == "ingress":
+                for flow_idx in range(self.num_flow):
+                    self.reprofiler_max_backlog[flow_idx] = max(
+                        tb.max_backlog_size for tb in self.reprofilers[flow_idx].token_buckets) * self.packet_size[
+                                                                flow_idx]
         return
 
     def generate_arrival_pattern(self):
@@ -253,6 +278,7 @@ class NetworkSimulator:
             sleep_bottleneck_smooth = np.amin(self.token_bucket_profile[:, 1] / self.token_bucket_profile[:, 0])
             sleep_bottleneck_burst = np.amax(self.token_bucket_profile[:, 1] / self.token_bucket_profile[:, 0])
             while True:
+                # Set the awake duration of all the flows.
                 if self.awake_dist == "exponential":
                     awake_dur = np.random.exponential(self.awake_dur)
                 else:
@@ -261,54 +287,62 @@ class NetworkSimulator:
                 if sync_time >= self.simulation_time:
                     break
                 sync_arrival.append(sync_time)
+                # Set the sleep duration of all the flows (including a synchronization jitter).
                 if self.arrival_pattern_type == "sync_smooth":
                     sleep_dur = np.random.rand() * sleep_bottleneck_smooth
                 else:
                     sleep_dur = sleep_bottleneck_burst
-                sync_time += sleep_dur
+                sync_time += sleep_dur + self.sync_jitter
                 if sync_time >= self.simulation_time:
                     break
                 sync_arrival.append(sync_time)
             sync_arrival.append(self.simulation_time)
             # Generate the corresponding (synchronized) arrival patterns.
-            time_idx, flow_traffic, flow_token = 0, [], []
+            time_idx, flow_traffic, flow_token, flow_sleep = 0, [], [], []
             for flow_idx in range(self.num_flow):
                 arrival_pattern.append([[0], [0]])
                 flow_traffic.append(0)
                 flow_token.append(self.token_bucket_profile[flow_idx, 1])
+                flow_sleep.append(0)
             while True:
                 for flow_idx in range(self.num_flow):
                     flow_rate = self.token_bucket_profile[flow_idx, 0]
                     flow_burst = self.token_bucket_profile[flow_idx, 1]
+                    # Skip if the next burst starts after the simulation finishes.
+                    flow_jitter = np.random.rand() * self.sync_jitter
+                    if sync_arrival[time_idx] + flow_jitter >= self.simulation_time:
+                        continue
+                    # Update arrival pattern after a sleep period.
+                    flow_token[flow_idx] += (flow_sleep[flow_idx] + flow_jitter) * flow_rate
+                    flow_token[flow_idx] = min(flow_token[flow_idx], flow_burst)
+                    update_pattern(arrival_pattern[flow_idx], sync_arrival[time_idx] + flow_jitter,
+                                   flow_traffic[flow_idx], 0)
                     # Update arrival pattern after an awake period (including an initial burst).
                     # Round the cumulative traffic (to ensure packetized arrival).
                     traffic_burst = flow_traffic[flow_idx] + flow_token[flow_idx]
                     awake_dur = sync_arrival[time_idx + 1] - sync_arrival[time_idx]
                     traffic_new = round(traffic_burst + awake_dur * flow_rate)
-                    awake_new = (traffic_new - traffic_burst) / flow_rate
+                    awake_dur = max((traffic_new - traffic_burst) / flow_rate, 0)
                     period_end_idx = time_idx + 2 if time_idx + 2 < len(sync_arrival) else time_idx + 1
-                    period_duration = sync_arrival[period_end_idx] - sync_arrival[time_idx]
-                    if awake_new > period_duration:
+                    period_duration = sync_arrival[period_end_idx] - sync_arrival[time_idx] - flow_jitter
+                    if awake_dur > period_duration:
                         # If the awake duration is too large, round down the cumulative traffic instead.
                         traffic_new -= 1
-                    assert traffic_new >= flow_traffic[flow_idx]
+                        awake_dur = max((traffic_new - traffic_burst) / flow_rate, 0)
                     if traffic_new > traffic_burst:
-                        update_pattern(arrival_pattern[flow_idx], sync_arrival[time_idx], traffic_burst, 0)
-                        awake_dur = awake_new
+                        update_pattern(arrival_pattern[flow_idx], sync_arrival[time_idx] + flow_jitter, traffic_burst,
+                                       0)
                         flow_token[flow_idx] = 0
                     else:
-                        awake_dur = 0
                         flow_token[flow_idx] -= traffic_new - flow_traffic[flow_idx]
                     flow_traffic[flow_idx] = traffic_new
-                    update_pattern(arrival_pattern[flow_idx], sync_arrival[time_idx] + awake_dur, traffic_new,
-                                   flow_rate)
+                    update_pattern(arrival_pattern[flow_idx], sync_arrival[time_idx] + awake_dur + flow_jitter,
+                                   traffic_new, flow_rate)
                     if time_idx + 2 >= len(sync_arrival):
                         continue
-                    # Update arrival pattern after a sleep period.
+                    # Keep track of the flow sleep duration.
                     sleep_dur = period_duration - awake_dur
-                    flow_token[flow_idx] += sleep_dur * flow_rate
-                    flow_token[flow_idx] = min(flow_token[flow_idx], flow_burst)
-                    update_pattern(arrival_pattern[flow_idx], sync_arrival[time_idx + 2], flow_traffic[flow_idx], 0)
+                    flow_sleep[flow_idx] = sleep_dur
                 time_idx += 2
                 if time_idx >= len(sync_arrival) - 1:
                     break
@@ -366,6 +400,11 @@ class NetworkSimulator:
                     reprofiler.reset()
         self.packet_count = [0] * self.num_flow
         self.scheduler_max_backlog = [0] * self.num_link
+        if self.scheduling_policy == "fifo":
+            if self.shaping_mode in ["per_flow", "interleaved", "ingress"]:
+                self.reprofiler_max_backlog = [0] * len(self.reprofilers)
+            if self.shaping_mode == "interleaved":
+                self.ingress_reprofiler_max_backlog = [0] * len(self.ingress_reprofilers)
         self.event_pool = []
         # Add packet arrival events to the event pool.
         self.arrival_time = []
