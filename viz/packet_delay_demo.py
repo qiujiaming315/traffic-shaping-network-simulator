@@ -69,6 +69,7 @@ def plot_delay_distribution(end_to_end_delay, output_path, fig_name):
     plt.clf()
     return
 
+
 def plot_statistics_bar(data, names, title, output_path, fig_name, percent_format=True):
     ax = setup_axis()
     if percent_format:

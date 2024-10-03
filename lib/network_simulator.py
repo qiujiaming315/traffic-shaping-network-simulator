@@ -79,6 +79,8 @@ class NetworkSimulator:
         self.token_buckets = [TokenBucketFluid(f[0], f[1]) for f in self.token_bucket_profile]
         # Register the shapers according to the traffic shaping mode (under FIFO scheduling).
         if scheduling_policy == "fifo":
+            if shaping_mode in ["per_flow", "interleaved", "ingress"]:
+                self.ingress_reprofilers = [get_reprofiler(flow_idx) for flow_idx in range(self.num_flow)]
             if shaping_mode == "per_flow":
                 self.reprofilers = dict()
                 for link_idx in range(self.num_link):
@@ -86,7 +88,6 @@ class NetworkSimulator:
                     for flow_idx in np.arange(self.num_flow)[link_flow_mask]:
                         self.reprofilers[(link_idx, flow_idx)] = get_reprofiler(flow_idx)
             elif shaping_mode == "interleaved":
-                self.ingress_reprofilers = [get_reprofiler(flow_idx) for flow_idx in range(self.num_flow)]
                 self.reprofilers = dict()
                 flow_group = defaultdict(list)
                 for flow_idx, flow_links in enumerate(self.flow_path):
@@ -96,8 +97,6 @@ class NetworkSimulator:
                     self.reprofilers[link_pair] = InterleavedShaper(self.packet_size,
                                                                     *[get_reprofiler(flow_idx) for flow_idx in
                                                                       flow_group[link_pair]])
-            elif shaping_mode == "ingress":
-                self.reprofilers = [get_reprofiler(flow_idx) for flow_idx in range(self.num_flow)]
         # Register the link schedulers.
         self.schedulers = []
         self.link_packetization_delay = np.zeros((self.num_link,), dtype=float)
@@ -137,6 +136,7 @@ class NetworkSimulator:
             # Connect the shapers and the schedulers according to the network topology.
             if self.scheduling_policy == "fifo":
                 if self.shaping_mode == "per_flow":
+                    self.ingress_reprofilers[flow_idx].next = self.reprofilers[(flow_links[0], flow_idx)]
                     for link_idx in flow_links:
                         self.reprofilers[(link_idx, flow_idx)].next = self.schedulers[link_idx]
                     for cur_link, next_link in zip(flow_links[:-1], flow_links[1:]):
@@ -146,9 +146,11 @@ class NetworkSimulator:
                     for cur_link, next_link in zip(flow_links[:-1], flow_links[1:]):
                         self.schedulers[cur_link].next[flow_idx] = self.reprofilers[(cur_link, next_link)]
                         self.reprofilers[(cur_link, next_link)].next = self.schedulers[next_link]
-                elif self.shaping_mode in ["ingress", "none"]:
-                    if self.shaping_mode == "ingress":
-                        self.reprofilers[flow_idx].next = self.schedulers[flow_links[0]]
+                elif self.shaping_mode == "ingress":
+                    self.ingress_reprofilers[flow_idx].next = self.schedulers[flow_links[0]]
+                    for cur_link, next_link in zip(flow_links[:-1], flow_links[1:]):
+                        self.schedulers[cur_link].next[flow_idx] = self.schedulers[next_link]
+                elif self.shaping_mode == "none":
                     for cur_link, next_link in zip(flow_links[:-1], flow_links[1:]):
                         self.schedulers[cur_link].next[flow_idx] = self.schedulers[next_link]
             elif self.scheduling_policy == "sced":
@@ -159,9 +161,9 @@ class NetworkSimulator:
         self.scheduler_max_backlog = [0] * self.num_link
         if scheduling_policy == "fifo":
             if shaping_mode in ["per_flow", "interleaved", "ingress"]:
-                self.reprofiler_max_backlog = [0] * len(self.reprofilers)
-            if shaping_mode == "interleaved":
                 self.ingress_reprofiler_max_backlog = [0] * len(self.ingress_reprofilers)
+            if shaping_mode in ["per_flow", "interleaved"]:
+                self.reprofiler_max_backlog = [0] * len(self.reprofilers)
         self.event_pool = []
         # Add packet arrival events to the event pool.
         self.arrival_time = []
@@ -170,12 +172,7 @@ class NetworkSimulator:
             self.arrival_time.append(flow_arrival)
             for packet_number, arrival in enumerate(flow_arrival):
                 if scheduling_policy == "fifo" and shaping_mode in ["per_flow", "interleaved", "ingress"]:
-                    if shaping_mode == "per_flow":
-                        first_reprofiler = self.reprofilers[(self.flow_path[flow_idx][0], flow_idx)]
-                    elif shaping_mode == "interleaved":
-                        first_reprofiler = self.ingress_reprofilers[flow_idx]
-                    else:
-                        first_reprofiler = self.reprofilers[flow_idx]
+                    first_reprofiler = self.ingress_reprofilers[flow_idx]
                     for tb in first_reprofiler.token_buckets:
                         event = Event(arrival, EventType.ARRIVAL, flow_idx, packet_number, tb)
                         heapq.heappush(self.event_pool, event)
@@ -241,23 +238,19 @@ class NetworkSimulator:
             self.scheduler_max_backlog[link_idx] = scheduler.max_backlog_size
         # Track the maximum backlog size at each reprofiler.
         if self.scheduling_policy == "fifo":
+            if self.shaping_mode in ["per_flow", "interleaved", "ingress"]:
+                for flow_idx in range(self.num_flow):
+                    self.ingress_reprofiler_max_backlog[flow_idx] = max(
+                        tb.max_backlog_size for tb in self.ingress_reprofilers[flow_idx].token_buckets) * \
+                                                                    self.packet_size[flow_idx]
             if self.shaping_mode == "per_flow":
                 for idx, key in enumerate(self.reprofilers.keys()):
                     flow_idx = key[1]
                     self.reprofiler_max_backlog[idx] = max(
                         tb.max_backlog_size for tb in self.reprofilers[key].token_buckets) * self.packet_size[flow_idx]
             elif self.shaping_mode == "interleaved":
-                for flow_idx in range(self.num_flow):
-                    self.ingress_reprofiler_max_backlog[flow_idx] = max(
-                        tb.max_backlog_size for tb in self.ingress_reprofilers[flow_idx].token_buckets) * \
-                                                                    self.packet_size[flow_idx]
                 for idx, key in enumerate(self.reprofilers.keys()):
                     self.reprofiler_max_backlog[idx] = self.reprofilers[key].max_backlog_size
-            elif self.shaping_mode == "ingress":
-                for flow_idx in range(self.num_flow):
-                    self.reprofiler_max_backlog[flow_idx] = max(
-                        tb.max_backlog_size for tb in self.reprofilers[flow_idx].token_buckets) * self.packet_size[
-                                                                flow_idx]
         return
 
     def generate_arrival_pattern(self):
@@ -389,22 +382,19 @@ class NetworkSimulator:
         for scheduler in self.schedulers:
             scheduler.reset()
         if self.scheduling_policy == "fifo":
+            if self.shaping_mode in ["per_flow", "interleaved", "ingress"]:
+                for reprofiler in self.ingress_reprofilers:
+                    reprofiler.reset()
             if self.shaping_mode in ["per_flow", "interleaved"]:
                 for key in self.reprofilers:
                     self.reprofilers[key].reset()
-            if self.shaping_mode == "interleaved":
-                for reprofiler in self.ingress_reprofilers:
-                    reprofiler.reset()
-            if self.shaping_mode == "ingress":
-                for reprofiler in self.reprofilers:
-                    reprofiler.reset()
         self.packet_count = [0] * self.num_flow
         self.scheduler_max_backlog = [0] * self.num_link
         if self.scheduling_policy == "fifo":
             if self.shaping_mode in ["per_flow", "interleaved", "ingress"]:
-                self.reprofiler_max_backlog = [0] * len(self.reprofilers)
-            if self.shaping_mode == "interleaved":
                 self.ingress_reprofiler_max_backlog = [0] * len(self.ingress_reprofilers)
+            if self.shaping_mode in ["per_flow", "interleaved"]:
+                self.reprofiler_max_backlog = [0] * len(self.reprofilers)
         self.event_pool = []
         # Add packet arrival events to the event pool.
         self.arrival_time = []
@@ -413,12 +403,7 @@ class NetworkSimulator:
             self.arrival_time.append(flow_arrival)
             for packet_number, arrival in enumerate(flow_arrival):
                 if self.scheduling_policy == "fifo" and self.shaping_mode in ["per_flow", "interleaved", "ingress"]:
-                    if self.shaping_mode == "per_flow":
-                        first_reprofiler = self.reprofilers[(self.flow_path[flow_idx][0], flow_idx)]
-                    elif self.shaping_mode == "interleaved":
-                        first_reprofiler = self.ingress_reprofilers[flow_idx]
-                    else:
-                        first_reprofiler = self.reprofilers[flow_idx]
+                    first_reprofiler = self.ingress_reprofilers[flow_idx]
                     for tb in first_reprofiler.token_buckets:
                         event = Event(arrival, EventType.ARRIVAL, flow_idx, packet_number, tb)
                         heapq.heappush(self.event_pool, event)
