@@ -275,29 +275,19 @@ def save_file(output_path, file_name, flow_routes):
 
 
 if __name__ == "__main__":
-    # num_cross_flow = 2
-    # num_hop = 10
-    num_flow = 100
+    # First, specify the directory to save the generated flow routes.
+    path = "./route/"
+    file_name = "route1"
+    # Specify the seed for the random number generator.
     np.random.seed(0)
-    # path = f"../data/route/google/pruned/{num_flow}/"
-    path = f"../data/route/cev/pruned/{num_flow}/"
-    for route_idx in range(100):
-        route = generate_cev_net(num_flow, prune=True)
-        route = {"app_dest_num": route["app_dest_num"], "routes": route["routes_pruned"]}
-        # route = route["routes"]
-        # route = generate_google_net(num_flow)
-        # route = generate_google_net(num_flow, prune=True)
-        # route = route["routes_pruned"]
-        save_file(path, f"route{route_idx + 1}", route)
-    # route = generate_tandem_route(num_cross_flow, num_hop, end_host=True)
-    # route = np.arange(1, 13).astype(int).reshape((1, 12))
-
-    # route = np.array([[1, 2]])
-    # enemy_route = np.array([1, 0]) * np.ones((100, 2))
-    # route = np.concatenate((route, enemy_route), axis=0)
-    # route = np.concatenate((route, np.array([[0, 1]])), axis=0).astype(int)
-
-    # # The shape of the route matrix should be ((num_hop + 3) * num_cross_flow, num_hop)
-    # num_flow, num_hop = route.shape
-    # path = f"../data/route/ingress_killer/"
-    # save_file(path, "route1", route)
+    # You can specify your own flow routes and directly save it to the directory.
+    route = np.array([[2, 1, 0],
+                      [1, 2, 3],
+                      [0, 1, 0]
+                      ])
+    save_file(path, file_name, route)
+    # Alternatively, you may generate flow routes in a tandem network.
+    save_file(path, file_name, generate_tandem_route(5, 3))
+    # Or you can generate flow routes motivated by some realistic network topology.
+    save_file(path, file_name, generate_google_net(10))  # For the US-Topo (inter-datacenter).
+    save_file(path, file_name, generate_cev_net(10))  # For the Orion CEV network (TSN setting for Ethernet).

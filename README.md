@@ -2,21 +2,25 @@
 
 ## Overview
 
-This repository provides implementation of a discrete event simulator for traffic shaping networks in Python. The simulator covers several schedulers, shapers, and shaping strategies.
+This repository provides implementation of a discrete event simulator for traffic shaping networks in Python. The simulator covers several schedulers, shapers, and shaping mechanisms.
 
 ### Scheduler
 
-We currently support First-In-First-Out (FIFO) scheduler and will extend to static priority and deadline-based schedulers in the future.
+We currently support First-In-First-Out (FIFO) and Service Curve-based Earliest Deadline first (SCED) scheduling policies. In the future, we will also add static priority schedulers.
 
 ### Traffic Shaper
 
-We provide traffic shapers in the form of packetized token buckets. Particularly, a `MultiSlopeShaper` module implements a combination of multiple token buckets, i.e., a packet is released by the module when released by every token bucket in the collection.
+We provide traffic shapers in the form of packetized token buckets. Particularly, a `MultiSlopeShaper` module takes as input multiple token buckets to generate a piece-wise linear and concave shaping curve. In this module, a packet is released as soon as it conforms with every token bucket.
 
-<!-- TODO: Explain the shaping policy (fully reprofiling). -->
+Based on `MultiSlopeShaper`, we implement the Two-Slope Reprofiling Curve (2SRC) introduced in [**On the Benefits of Traffic “Reprofiling” the Multiple Hops Case—Part I**](https://ieeexplore.ieee.org/abstract/document/10509732/). Specifically, as illustrated in the figure below, we assume each flow has a traffic profile α in the form of a token bucket, i.e., traffic from the flow conforms with α upon arriving at the network. We insert a 2SRC σ at different places inside the network (see the next section for details) to regulate the flow traffic, whose parameters can be computed based on α and a so-called "reprofiling delay" D.
 
-### Shaping Strategy
+<p align="center">
+    <img src="img/reprofiling_delay.png" alt="overview" width="60%"/>
+</p>
 
-We provide shaping strategies with different levels of complexity, including per user flow shaping at every hop, interleaved shaping at every hop, shaping only at network ingress, and no shaping.
+### Shaping Mechanism
+
+We provide shaping mechanisms with different levels of complexity. They include: Per flow shaping, where each user flow is regulated at every hop it traverses. Interleaved shaping, where one shaper is placed at every output queuing point of the switch for every input port to regulate the aggregate traffic of passing user flows. Ingress shaping, where user flows are only regulated at network ingress. No shaping, where flows are not regulated at all inside the network.
 
 ## Requirements
 
@@ -37,34 +41,27 @@ pip install -r requirements.txt
 
 ### Generating Network Topology and Flow Profile
 
-<!-- Our algorithm takes network topology and flow profile as inputs. Before running the algorithm, you need to first generate some input data.
+The simulator takes as input flow routes and profiles. Before running the simulation, you need to first generate the input data.
 
-We provide scripts that facilitate generating network profile, flow profile, and link weights available through `create_network.py`, `create_flow.py`, and `create_weight.py` respectively in the `input/` sub-directory. Each script allows you to either specify your own profile or generate profile using the build-in functions. You can try these different options by modifying the `__main__` function (with example code snippets for each option) of each script.
+We provide scripts that facilitate generating network route and flow profile. They are available in `create_route.py` and `create_flow.py` located in the `input/` sub-directory. Each script allows you to either specify your own input data or generate data using the build-in functions. You can try these different options by modifying the `__main__` function (with some example codes included) of each script.
 
 Once you modified the `__main__` function according to the desired configurations, you can directly run those scripts through command lines.
 
 ```
 # Navigate into the input/ sub-directory.
 cd input
-# Generate network profile, flow profile, and (optional) link weights.
-python create_network.py
+# Generate flow route and flow profile.
+python create_route.py
 python create_flow.py
-python create_weight.py
-``` -->
+```
 
-#### Network Profile
+#### Flow Route
 
-<!-- We use network profile to specify network topology as well as the route of each flow in the network.  The network profile is represented as an `m × n` matrix, with `m` and `n` being the number of traffic flows and network nodes respectively.
-
-The matrix may either be of type `bool` for feed-forward network or `int` for cyclic network. The following figure demonstrates an example of retrieving network profile matrices given the graph representations of the networks.
-
-<p align="center">
-    <img src="img/network_profile.png" alt="network_profile" width="80%"/>
-</p> -->
+The flow route file specifies the route taken by each user flow as it traverses through the network. The flow route is represented as an `m × n` matrix, with `m` and `n` being the number of user flows and network links, respectively. The matrix consists of integers specifying whether a flow traverses a link, and if so, in which order. For example, if flow 3 traverses link 2, followed by link 5 and then link 3, the third row of the flow route matrix should be ``[0, 1, 3, 0, 2]``, assuming the network has 5 links in total.
 
 #### Flow Profile
 
-<!-- We use flow profile to specify the token bucket parameters (rate, burst size) as well as the end-to-end latency target of each flow in the network. The flow profile is represented as an `m × 3` matrix, where `m` is the number of flows. The three columns stand for rate, burst size, and latency target respectively. -->
+We use flow profile to specify the token bucket parameters (rate, burst size) as well as the end-to-end latency target of each flow in the network. The flow profile is represented as an `m × 3` matrix, where `m` is the number of flows. The three columns stand for rate, burst size, and latency target, respectively.
 
 ### Running the Simulation
 
@@ -86,6 +83,8 @@ For example, to compute the minimum required sum of link bandwidth with SCED sch
 # where optimization.py is stored.
 python optimization.py input/network/3/net1.npy input/flow/3/flow1.npz output result --scheduler 1 --objective 0 --mode 1
 ``` -->
+
+### Data Collection
 
 ### Library
 
