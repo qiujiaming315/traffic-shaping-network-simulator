@@ -133,24 +133,20 @@ def save_file(output_path, file_name, flow):
 
 
 if __name__ == "__main__":
-    num_flow = 100
+    # First, specify the directory to save the generated flow profiles.
+    path = f"./flow/"
+    file_name = "flow1"
+    # Specify the seed for the random number generator.
     np.random.seed(0)
-    # flow_data = np.array([50, 50, 0.1]) * np.ones((num_flow, 3))
-    # save_file(path, "flow1", flow_data)
-
-    # path = f"../data/flow/ingress_killer/"
-    # flow_data = np.array([[50, 50, 1]])
-    # enemy_flow = np.array([0.5, 1, 100]) * np.ones((100, 3))
-    # flow_data = np.concatenate((flow_data, enemy_flow), axis=0)
-    # flow_data = np.concatenate((flow_data, np.array([[10, 10, 1]])), axis=0)
-    # save_file(path, "flow1", flow_data)
-
-    # path = f"../data/flow/tandem/rounded/{num_flow}/"
-    # path = f"../data/flow/google/{num_flow}/"
-    path = f"../data/flow/cev/{num_flow}/"
-    for flow_idx in range(100):
-        flow_data = generate_tsn_flow(num_flow)
-        # flow_data = generate_fb_flow(num_flow)
-        save_file(path, f"flow{flow_idx + 1}", flow_data)
-    # for file_idx in range(10):
-    #     save_file(path, f"flow{file_idx + 1}", generate_random_flow(num_flow))
+    # You can specify your own flow profile and directly save it to the directory.
+    flow = np.array([[15.0, 8.0, 1.0],
+                     [2.0, 4.0, 2.0],
+                     [3.0, 13.0, 5.0]
+                     ])
+    save_file(path, file_name, flow)
+    # Alternatively, you may generate and save a random flow profile.
+    save_file(path, "flow", generate_random_flow(10))
+    # Or you can generate a flow profile motivated by the Facebook paper (for inter-datacenter network).
+    save_file(path, "flow", generate_fb_flow(10))
+    # Or you can generate a flow profile for TSN network.
+    save_file(path, "flow", generate_tsn_flow(10))

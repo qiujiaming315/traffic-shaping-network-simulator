@@ -65,42 +65,39 @@ We use flow profile to specify the token bucket parameters (rate, burst size) as
 
 ### Running the Simulation
 
-<!-- The main script for running the minimization algorithm is `optimization.py`. Running it with `-h` gives you a detailed description over a list of parameters you can control:
+The main script for running the simulation is `simulate.py`. Running it with `-h` gives you a detailed description over a list of parameters you can control:
 
-- `net`: path to the input network profile.
-- `flow`: path to the input flow profile.
-- `out`: directory to save the output file.
-- `file_name`: name of the file to save results.
-- `--scheduler`: type of scheduler applied to each hop of the network. 0 for FIFO and 1 for SCED.
-- `--objective`: type of the objective function to minimize. Available choices include: 0 for the sum of link bandwidth, 1 for weighted sum of link bandwidth, 2 for maximum link bandwidth.
-- `--weight`: path to the link weights if the objective function is selected to be a weighted sum of link bandwidth.
-- `--mode`: bandwidth minimization algorithm to run, 0 for NLP-based algorithm, 1 for the greedy algorithm. Greedy algorithm is applied by default.
+- `flow_path`: path to the input flow profile data.
+- `route_path`: path to the input flow route data.
+- `out_dir`: directory to save the output file.
+- `file_name`: name of the output file.
+- `--simulation-time`: total simulation time (in seconds).
+- `--scheduling-policy`: scheduling policy for the network.
+- `--shaping-mode`: shaping mechanism to regulate user flows.
+- `--buffer-bound`: size of the scheduler buffers.
+- `--arrival-pattern-type` `awake-dur` `awake-dist` `sync-jitter`: parameters to control the traffic arrival pattern.
 
-For example, to compute the minimum required sum of link bandwidth with SCED schedulers using the greedy algorithm with network profile saved in `input/network/3/net1.npy` and flow profile saved in `input/flow/3/flow1.npz`, and save the results to `output/` under the name `result.npz`, you should use
+For example, to run a 100s simulation given the flow profile `input/flow/flow1.npy` and flow route `input/route/route1.npy`, using FIFO schedulers, per flow shaping, infinite buffer, and the default traffic arrival pattern, you can use the following command to save the results to the folder `output/` under the name `result.pickle`.
 
 ```
 # Make sure you are in the root directory of this repo,
-# where optimization.py is stored.
-python optimization.py input/network/3/net1.npy input/flow/3/flow1.npz output result --scheduler 1 --objective 0 --mode 1
-``` -->
+# where simulate.py is located.
+python simulate.py input/flow/flow1.npy input/route/route1.npy output result --simulation-time 100 --scheduling-policy fifo --shaping-mode per_flow --buffer-bound infinite
+```
 
 ### Data Collection
 
+The simulator allows you to collect data including the arrival time and end-to-end delay of each packet, the desired delay bound of each user flow, and the maximum backlog observed at each queuing point (schedulers and shapers). From this data you should be able to easily compute statistics such as packet loss rate, delay violation rate, and packet delay distribution.
+
 ### Library
 
-<!-- We factor various parts of the code into different modules in the `lib/`
-directory. You can begin by looking at the main optimization script to see how
-to make use of these modules.
+We factor various parts of the code into different modules in the `lib/`
+sub-directory. Many of them are used as building blocks in `simulate.py`.
 
-- `utils.py`: Implement various utility functions (*e.g.,* function to load input data).
-- `network_parser.py`: Helper functions that faciliate parsing the inputs and the solutions of the optimization.
-- `genetic.py`: A parent class that provides a generic implementation of the genetic algorithm.
-- `genetic_fifo.py`: Implement a genetic algorithm that performs guided random search to find the best solution based on solving multiple non-linear programs, for networks with FIFO schedulers.
-- `genetic_sced.py`: Similar to `genetic_fifo.py`, but for networks with SCED schedulers.
-- `heuristic_fifo.py`: Implement Greedy and the baseline solutions for networks with FIFO schedulers.
-- `heuristic_sced.py`: Similar to `heuristic_fifo.py`, but for networks with SCED schedulers.
-- `order_generator.py`: Implement various functions that handle flow orderings.
-- `octeract.py`: Formulate the minimization problem into NLPs and call the Octeract engine to solve the generated NLPs. -->
+- `network_simulator.py`: main body of the network simulator.
+- `schedulers.py`: a collection of different schedulers.
+- `traffic_shapers.py`: a collection of traffic shapers.
+- `rl_env.py`: a wrapper of the network simulator to create a reinforcement learning environment.
 
 ## License
 
