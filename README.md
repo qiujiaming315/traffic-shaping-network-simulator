@@ -91,13 +91,12 @@ The simulator allows you to collect data including the arrival time and end-to-e
 
 ### Library
 
-We factor various parts of the code into different modules in the `lib/`
-sub-directory. Many of them are used as building blocks in `simulate.py`.
+We factor various parts of the code into different modules in the `lib/` sub-directory. Many of them are used as building blocks in `simulate.py`.
 
 - `network_simulator.py`: main body of the network simulator.
 - `schedulers.py`: a collection of different schedulers.
 - `traffic_shapers.py`: a collection of traffic shapers.
-- `rl_env.py`: a wrapper of the network simulator to create a reinforcement learning environment.
+- `rl_env.py`: a wrapper of the network simulator to create a reinforcement learning environment. See `lib/README.md` for details.
 
 ## License
 

@@ -1,0 +1,12 @@
+### Reinforcement Learning Environment for Traffic Shaping Network
+
+In addition to the traffic shaping network simulator, we also provide a wrapper in `rl_env.py` for users to train reinforcement learning agents that make shaping control decisions to optimize network performance metrics. This is motivated by the fact that traffic shaping usually trades performance on lower level statistics for worst case delay guarantees. Specifically, while proper shaping mechanisms ensure bounded end-to-end delay for all packets, they also suffer from worse average delay performance because they serve packets in a non-work-conserving fashion. To further improve the performance of a traffic shaping network through reinforcement learning, we develop an environment similar to the ones in OpenAI `gym`. Based on the current `state`, it allows you to take an `action` to transit into the `next_state` and receive a `reward`, which are defined as the follows:
+- `state`: it incorporates information we can collect from the network to describe the current state of the system, including the remaining token count of each flow, and the current backlog at all the shapers and schedulers.
+- `action`: each flow can take a binary action to either turn on or turn off all its traffic shapers throughout the network for the next time step. 
+- `reward`: the reward is defined as a function of the end-to-end delay experienced by the flow at the current time step. Specifically, a flow receives a `high_reward` if the end-to-end delay is 0, which linearly drops to a `low_reward` as the delay increases to the desired worst case bound. If the delay of any flow exceeds its bound, the flow receives a large negative `penalty` and the simulation terminates.
+
+In addition to the inputs to the network simulator, the reinforcement learning environment accepts the following additional inputs:
+- `pause_interval`: the length of a time step (in second). At each interval the simulation pauses for the reinforcement learning agents to collect state information, compute rewards, and take shaping actions for the next time step.
+- `high_reward`: the highest possible reward received by a flow when its end-to-end delay is 0.
+- `low_reward`: the reward received by a flow when its end-to-end delay is equal to the worst case bound.
+- `penalty`: the negative penalty received by a flow when its end-to-end delay exceeds the bound.
