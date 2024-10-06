@@ -43,7 +43,7 @@ pip install -r requirements.txt
 
 The simulator takes as input flow routes and profiles. Before running the simulation, you need to first generate the input data.
 
-We provide scripts that facilitate generating network route and flow profile. They are available in `create_route.py` and `create_flow.py` located in the `input/` sub-directory. Each script allows you to either specify your own input data or generate data using the build-in functions. You can try these different options by modifying the `__main__` function (with some example codes included) of each script.
+We provide scripts that facilitate generating flow route and flow profile. They are available in `create_route.py` and `create_flow.py` located in the `input/` sub-directory. Each script allows you to either specify your own input data or generate data using the build-in functions. You can try these different options by modifying the `__main__` function (with some example codes included) of each script.
 
 Once you modified the `__main__` function according to the desired configurations, you can directly run those scripts through command lines.
 
