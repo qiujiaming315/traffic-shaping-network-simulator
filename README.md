@@ -39,7 +39,7 @@ pip install -r requirements.txt
 
 ## Usage
 
-### Generating Network Topology and Flow Profile
+### Generating Flow Route and Flow Profile
 
 The simulator takes as input flow routes and profiles. Before running the simulation, you need to first generate the input data.
 
