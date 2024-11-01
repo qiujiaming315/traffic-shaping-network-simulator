@@ -49,10 +49,10 @@ def plot_delay_distribution(end_to_end_delay, output_path, fig_name):
     ax = setup_axis()
     ax.set_ylabel("Frequency", labelpad=10, color='#333333', size=40)
     ax.set_xlabel("Normalized Packet End-to-end Delay", labelpad=15, color='#333333', size=40)
-    ax.xaxis.set_major_formatter(mtick.PercentFormatter())
+    # ax.xaxis.set_major_formatter(mtick.PercentFormatter())
     ax.hist(end_to_end_delay, 100, color="blue", weights=np.ones_like(end_to_end_delay) / end_to_end_delay.size,
             label="distribution")
-    violation = np.sum(end_to_end_delay > 100) / len(end_to_end_delay)
+    violation = np.sum(end_to_end_delay > 1) / len(end_to_end_delay)
     ax.axvline(end_to_end_delay.mean(), color="#00CC00", alpha=0.5, linestyle="dashed", linewidth=4, label="average")
     sorted_delay = np.sort(end_to_end_delay)
     ax.axvline(sorted_delay[int(0.5 * len(sorted_delay))], color="#00CC00", alpha=0.5, linewidth=4, label="median")
@@ -70,14 +70,14 @@ def plot_delay_distribution(end_to_end_delay, output_path, fig_name):
     return
 
 
-def plot_statistics_bar(data, names, title, output_path, fig_name, percent_format=True):
+def plot_statistics_bar(data, names, ylabel, output_path, fig_name, percent_format=True):
     ax = setup_axis()
     if percent_format:
         ax.yaxis.set_major_formatter(mtick.PercentFormatter())
     ax.bar(np.arange(len(data)), data, width=0.5, color='blue')
     ax.set_xticks(np.arange(len(data)))
     ax.set_xticklabels(names, size=20)
-    ax.set_title(title, color='#333333', pad=20, size=45)
+    ax.set_ylabel(ylabel, labelpad=10, color='#333333', size=40)
     plt.tight_layout()
     plt.savefig(os.path.join(output_path, fig_name + ".png"), bbox_inches='tight')
     plt.clf()

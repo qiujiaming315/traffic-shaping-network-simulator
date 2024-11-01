@@ -145,8 +145,8 @@ if __name__ == "__main__":
                      ])
     save_file(path, file_name, flow)
     # Alternatively, you may generate and save a random flow profile.
-    save_file(path, "flow", generate_random_flow(10))
+    save_file(path, file_name, generate_random_flow(10))
     # Or you can generate a flow profile motivated by the Facebook paper (for inter-datacenter network).
-    save_file(path, "flow", generate_fb_flow(10))
+    save_file(path, file_name, generate_fb_flow(10))
     # Or you can generate a flow profile for TSN network.
-    save_file(path, "flow", generate_tsn_flow(10))
+    save_file(path, file_name, generate_tsn_flow(10))

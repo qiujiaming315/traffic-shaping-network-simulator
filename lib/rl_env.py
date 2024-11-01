@@ -25,6 +25,7 @@ class RLNetworkEnv:
         self.low_reward = low_reward
         self.penalty = penalty
         self.time = 0
+        self.num_action = self.simulator.num_flow
         # Add a summary event at each time interval to collect a snapshot of the network.
         for time_step in np.arange(pause_interval, simulation_time + pause_interval, pause_interval):
             event = Event(time_step, EventType.SUMMARY)
