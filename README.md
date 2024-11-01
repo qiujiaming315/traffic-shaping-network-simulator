@@ -89,6 +89,24 @@ python simulate.py input/flow/flow1.npy input/route/route1.npy output result --s
 
 The simulator allows you to collect data including the arrival time and end-to-end delay of each packet, the desired delay bound of each user flow, and the maximum backlog observed at each queuing point (schedulers and shapers). From this data you should be able to easily compute statistics such as packet loss rate, delay violation rate, and packet delay distribution.
 
+
+### Running Simulations for Reinforcement Learning
+
+In addition to run regular network simulation, you can also wrap the simulator into a reinforcement learning environment and run it as a game. An example run is provided in `rl_play.py`. Running it with `-h` gives you a detailed description over a list of parameters you can control. They include the parameters for the network simulator, and the following additional inputs:
+
+- `pause_interval`: the length of a time step (in second) for the reinforcement learning environment.
+- `high_reward` `low_reward` `penalty`: parameters for reward computing of the reinforcement learning environment.
+
+Details of the reinforcement learning environment, including how it uses the above parameters to compute reward at each time step, is available in `lib/README.md`.
+
+Similar to the command for running a network simulation, you can specify the values of the additional parameters to run a reinforcement learning episode.
+
+```
+# Make sure you are in the root directory of this repo,
+# where rl_play.py is located.
+python rl_play.py input/flow/flow1.npy input/route/route1.npy --pause-interval 1 --high-reward 1 --low-reward 0.1 --penalty -10 --simulation-time 100 --scheduling-policy fifo --shaping-mode per_flow --buffer-bound infinite
+```
+
 ### Library
 
 We factor various parts of the code into different modules in the `lib/` sub-directory. Many of them are used as building blocks in `simulate.py`.
