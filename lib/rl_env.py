@@ -57,19 +57,17 @@ class RLNetworkEnv:
         if self.simulator.scheduling_policy == "fifo":
             if self.simulator.shaping_mode in ["per_flow", "interleaved", "ingress"]:
                 for flow_idx, a in enumerate(action):
+                    activate_reprofiler(self.simulator.ingress_reprofilers[flow_idx], a)
                     if self.simulator.shaping_mode == "per_flow":
                         flow_links = self.simulator.flow_path[flow_idx]
                         for link_idx in flow_links:
                             activate_reprofiler(self.simulator.reprofilers[(link_idx, flow_idx)], a)
                     elif self.simulator.shaping_mode == "interleaved":
-                        activate_reprofiler(self.simulator.ingress_reprofilers[flow_idx], a)
                         flow_links = self.simulator.flow_path[flow_idx]
                         for cur_link, next_link in zip(flow_links[:-1], flow_links[1:]):
                             activate_reprofiler(
                                 self.simulator.reprofilers[(cur_link, next_link)].multi_slope_shapers[flow_idx],
                                 a)
-                    else:
-                        activate_reprofiler(self.simulator.reprofilers[flow_idx], a)
         self.time += self.pause_interval
         # Start the simulation.
         packet_count_old = copy.deepcopy(self.simulator.packet_count)
