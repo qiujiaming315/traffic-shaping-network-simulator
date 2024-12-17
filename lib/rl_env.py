@@ -83,24 +83,20 @@ class RLNetworkEnv:
             token_num = tb.peek(self.time)
             state.append(token_num * p)
         if self.simulator.scheduling_policy == "fifo":
-            if self.simulator.shaping_mode in ["per_flow", "interleaved"]:
-                reprofiler_backlog = [[0] * self.simulator.num_link for _ in range(self.simulator.num_flow)]
-            elif self.simulator.shaping_mode == "ingress":
-                reprofiler_backlog = [0] * self.simulator.num_flow
-            for flow_idx, flow_links in enumerate(self.simulator.flow_path):
-                if self.simulator.shaping_mode == "ingress":
-                    rb = self.simulator.reprofilers[flow_idx].peek(self.time)
-                    reprofiler_backlog[flow_idx] = rb * self.simulator.packet_size[flow_idx]
-                if self.simulator.shaping_mode == "interleaved":
+            if self.simulator.shaping_mode in ["per_flow", "interleaved", "ingress"]:
+                reprofiler_num = 1 if self.simulator.shaping_mode == "ingress" else self.simulator.num_link + 1
+                reprofiler_backlog = [[0] * reprofiler_num for _ in range(self.simulator.num_flow)]
+                for flow_idx, flow_links in enumerate(self.simulator.flow_path):
                     ingress_rb = self.simulator.ingress_reprofilers[flow_idx].peek(self.time)
                     reprofiler_backlog[flow_idx][0] = ingress_rb * self.simulator.packet_size[flow_idx]
-                    for cur_link, next_link in zip(flow_links[:-1], flow_links[1:]):
-                        rb = self.simulator.reprofilers[(cur_link, next_link)].peek(self.time)
-                        reprofiler_backlog[flow_idx][next_link] = rb
-                for link_idx in flow_links:
-                    if self.simulator.shaping_mode == "per_flow":
-                        rb = self.simulator.reprofilers[(link_idx, flow_idx)].peek(self.time)
-                        reprofiler_backlog[flow_idx][link_idx] = rb * self.simulator.packet_size[flow_idx]
+                    if self.simulator.shaping_mode == "interleaved":
+                        for cur_link, next_link in zip(flow_links[:-1], flow_links[1:]):
+                            rb = self.simulator.reprofilers[(cur_link, next_link)].peek(self.time)
+                            reprofiler_backlog[flow_idx][next_link + 1] = rb
+                    elif self.simulator.shaping_mode == "per_flow":
+                        for link_idx in flow_links:
+                            rb = self.simulator.reprofilers[(link_idx, flow_idx)].peek(self.time)
+                            reprofiler_backlog[flow_idx][link_idx + 1] = rb * self.simulator.packet_size[flow_idx]
         scheduler_backlog = [[0] * self.simulator.num_link for _ in range(self.simulator.num_flow)]
         for flow_idx, flow_links in enumerate(self.simulator.flow_path):
             for link_idx in flow_links:
@@ -111,10 +107,7 @@ class RLNetworkEnv:
             if self.simulator.scheduling_policy == "fifo":
                 if self.simulator.shaping_mode in ["per_flow", "interleaved", "ingress"]:
                     rb = reprofiler_backlog[flow_idx]
-                    if self.simulator.shaping_mode in ["per_flow", "interleaved"]:
-                        state.extend(rb)
-                    else:
-                        state.append(rb)
+                    state.extend(rb)
             sb = scheduler_backlog[flow_idx]
             state.extend(sb)
         # Compute the reward based on the end-to-end latency and determine whether the episode terminates.
@@ -145,12 +138,16 @@ class RLNetworkEnv:
         # Set the initial state.
         if self.simulator.scheduling_policy == "fifo":
             if self.simulator.shaping_mode in ["per_flow", "interleaved"]:
-                state_size = 2 * self.simulator.num_link + 1
+                # Token num, ingress shaper backlog, per-hop shaper backlog, per-hop scheduler backlog
+                state_size = 2 * self.simulator.num_link + 2
             elif self.simulator.shaping_mode == "ingress":
+                # Token num, ingress shaper backlog, per-hop scheduler backlog
                 state_size = self.simulator.num_link + 2
             elif self.simulator.shaping_mode == "none":
+                # Token num, per-hop scheduler backlog
                 state_size = self.simulator.num_link + 1
         elif self.simulator.scheduling_policy == "sced":
+            # Token num, per-hop scheduler backlog
             state_size = self.simulator.num_link + 1
         states = [[0] * state_size for _ in range(self.simulator.num_flow)]
         for state, f, p in zip(states, self.simulator.token_bucket_profile, self.simulator.packet_size):

@@ -164,6 +164,12 @@ class SCEDScheduler(Scheduler):
         heapq.heappush(self.backlog, new_packet)
         return
 
+    def reset(self):
+        super().reset()
+        for ms_shaper in self.multi_slope_shapers:
+            ms_shaper.reset()
+        return
+
 
 @dataclass
 class Packet:
