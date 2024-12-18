@@ -195,17 +195,15 @@ class NetworkSimulator:
             if event.event_type == EventType.ARRIVAL:
                 # Start a busy period by creating a forward event if the component is idle upon arrival.
                 if event.component.arrive(event.time, event.packet_number, event.flow_idx, event.internal):
-                    forward_event = Event(event.time, EventType.FORWARD, packet_number=event.packet_number,
-                                          component=event.component)
+                    forward_event = Event(event.time, EventType.FORWARD, event.flow_idx, event.packet_number,
+                                          event.component)
                     heapq.heappush(self.event_pool, forward_event)
             elif event.event_type == EventType.FORWARD:
-                next_depart, next_number, idle, flow_idx, forwarded_number, next_component = event.component.forward(
-                    event.time,
-                    event.packet_number)
+                (next_depart, next_idx, next_number, idle, forwarded_idx, forwarded_number,
+                 next_component) = event.component.forward(event.time, event.packet_number, event.flow_idx)
                 # Submit the next forward event if the component is currently busy.
                 if not idle:
-                    forward_event = Event(next_depart, EventType.FORWARD, packet_number=next_number,
-                                          component=event.component)
+                    forward_event = Event(next_depart, EventType.FORWARD, next_idx, next_number, event.component)
                     heapq.heappush(self.event_pool, forward_event)
                 # Create a packet arrival event for the next component.
                 departed = next_component is not None
@@ -213,28 +211,31 @@ class NetworkSimulator:
                 is_internal_tb = isinstance(event.component, TokenBucket) and event.component.internal
                 is_next_interleaved = isinstance(next_component, InterleavedShaper)
                 is_internal_ms = isinstance(event.component, MultiSlopeShaper) and event.component.internal
-                is_terminal = isinstance(event.component, Scheduler) and event.component.terminal[flow_idx]
+                is_terminal = isinstance(event.component, Scheduler) and event.component.terminal[forwarded_idx]
                 if departed:
                     ms_arrival = is_next_ms and not is_internal_tb
                     interleaved_arrival = is_next_interleaved and not is_internal_ms
                     if not (is_terminal or ms_arrival):
-                        arrival_event = Event(event.time, EventType.ARRIVAL, flow_idx, forwarded_number, next_component,
+                        arrival_event = Event(event.time, EventType.ARRIVAL, forwarded_idx, forwarded_number,
+                                              next_component,
                                               internal=is_internal_ms)
                         heapq.heappush(self.event_pool, arrival_event)
                     if ms_arrival or interleaved_arrival:
-                        ms_component = next_component if ms_arrival else next_component.multi_slope_shapers[flow_idx]
+                        ms_component = next_component if ms_arrival else next_component.multi_slope_shapers[
+                            forwarded_idx]
                         # Create an arrival event for every token bucket of the multi-slope shaper.
                         for tb in ms_component.token_buckets:
-                            arrival_event = Event(event.time, EventType.ARRIVAL, flow_idx, forwarded_number, tb)
+                            arrival_event = Event(event.time, EventType.ARRIVAL, forwarded_idx, forwarded_number, tb)
                             heapq.heappush(self.event_pool, arrival_event)
                     # Record the packet departure time.
                     if not (is_internal_tb or is_internal_ms) and self.keep_per_hop_departure:
-                        self.departure_time[flow_idx][forwarded_number].append(event.time)
+                        self.departure_time[forwarded_idx][forwarded_number].append(event.time)
                     # Update the packet count and compute end-to-end latency.
                     if is_terminal:
-                        self.packet_count[flow_idx] = forwarded_number + 1
-                        self.end_to_end_delay[flow_idx][forwarded_number] = event.time - self.arrival_time[flow_idx][
-                            forwarded_number]
+                        self.packet_count[forwarded_idx] = forwarded_number + 1
+                        self.end_to_end_delay[forwarded_idx][forwarded_number] = event.time - \
+                                                                                 self.arrival_time[forwarded_idx][
+                                                                                     forwarded_number]
             elif event.event_type == EventType.SUMMARY:
                 break
         # Track the maximum backlog size at each link scheduler.
@@ -243,15 +244,16 @@ class NetworkSimulator:
         # Track the maximum backlog size at each reprofiler.
         if self.scheduling_policy == "fifo":
             if self.shaping_mode in ["per_flow", "interleaved", "ingress"]:
-                for flow_idx in range(self.num_flow):
-                    self.ingress_reprofiler_max_backlog[flow_idx] = max(
-                        tb.max_backlog_size for tb in self.ingress_reprofilers[flow_idx].token_buckets) * \
-                                                                    self.packet_size[flow_idx]
+                for forwarded_idx in range(self.num_flow):
+                    self.ingress_reprofiler_max_backlog[forwarded_idx] = max(
+                        tb.max_backlog_size for tb in self.ingress_reprofilers[forwarded_idx].token_buckets) * \
+                                                                         self.packet_size[forwarded_idx]
             if self.shaping_mode == "per_flow":
                 for idx, key in enumerate(self.reprofilers.keys()):
-                    flow_idx = key[1]
+                    forwarded_idx = key[1]
                     self.reprofiler_max_backlog[idx] = max(
-                        tb.max_backlog_size for tb in self.reprofilers[key].token_buckets) * self.packet_size[flow_idx]
+                        tb.max_backlog_size for tb in self.reprofilers[key].token_buckets) * self.packet_size[
+                                                           forwarded_idx]
             elif self.shaping_mode == "interleaved":
                 for idx, key in enumerate(self.reprofilers.keys()):
                     self.reprofiler_max_backlog[idx] = self.reprofilers[key].max_backlog_size

@@ -13,7 +13,7 @@ class NetworkComponent:
         """Method to add an arriving packet to backlog."""
         return
 
-    def forward(self, time, packet_number):
+    def forward(self, time, packet_number, component_idx):
         """Method to release a packet from the backlog."""
         return
 
@@ -46,11 +46,12 @@ class TokenBucket(NetworkComponent):
         self.max_backlog_size = max(self.max_backlog_size, len(self.backlog))
         return self.idle
 
-    def forward(self, time, packet_number):
+    def forward(self, time, packet_number, component_idx):
+        # Check if the packet to forward has the right sequence number.
         if len(self.backlog) == 0 or self.backlog[0][1] != packet_number:
             # Redundant forward event. Ignore.
-            return time, 0, True, 0, 0, None
-        forwarded_number, component_idx, next_component = 0, 0, None
+            return time, 0, 0, True, 0, 0, None
+        forwarded_number, forwarded_idx, next_component = 0, 0, None
         if self.idle:
             # Initiate a busy period.
             if self.active:
@@ -64,11 +65,11 @@ class TokenBucket(NetworkComponent):
             if self.active:
                 self.token += self.rate * (time - self.depart) - 1
                 self.depart = time
-            component_idx, next_component = self.component_idx, self.next
+            forwarded_idx, next_component = self.component_idx, self.next
             if len(self.backlog) == 0:
                 # Terminate a busy period.
                 self.idle = True
-                return time, 0, self.idle, component_idx, forwarded_number, next_component
+                return time, 0, 0, self.idle, forwarded_idx, forwarded_number, next_component
         # Examine the next packet.
         next_arrival, next_number = self.backlog[0]
         next_depart = time
@@ -77,7 +78,7 @@ class TokenBucket(NetworkComponent):
             if self.token < 1:
                 delay = (1 - self.token) / self.rate
             next_depart = max(next_arrival, self.depart) + delay
-        return next_depart, next_number, self.idle, component_idx, forwarded_number, next_component
+        return next_depart, 0, next_number, self.idle, forwarded_idx, forwarded_number, next_component
 
     def peek(self, time):
         # Update the token bucket state.
@@ -197,12 +198,12 @@ class MultiSlopeShaper(NetworkComponent):
         self.eligible_packets[component_idx].append((time, packet_number))
         return all(len(ep) > 0 for ep in self.eligible_packets)
 
-    def forward(self, time, packet_number):
+    def forward(self, time, packet_number, component_idx):
         # Release an eligible packet.
         forwarded_number = 0
         for ep in self.eligible_packets:
             _, forwarded_number = ep.pop(0)
-        return time, 0, True, self.flow_idx, forwarded_number, self.next
+        return time, 0, 0, True, self.flow_idx, forwarded_number, self.next
 
     def peek(self, time):
         # Return the maximum number of backlogged packets across all the token buckets.
@@ -258,16 +259,19 @@ class InterleavedShaper(NetworkComponent):
             # Forward the first packet if eligible.
             return packet_idx == 0
 
-    def forward(self, time, packet_number):
-        if len(self.backlog) == 0:
+    def forward(self, time, packet_number, component_idx):
+        # Check if the packet to forward has the right flow index and packet sequence number.
+        if len(self.backlog) == 0 or (self.backlog[0][0] != component_idx or self.backlog[0][1] != packet_number):
             # Redundant forward event. Ignore.
-            return time, 0, True, 0, 0, None
+            return time, 0, 0, True, 0, 0, None
         # Release the packet at the top of the queue.
-        flow_idx, forwarded_number, eligible = self.backlog.pop(0)
+        forwarded_idx, forwarded_number, eligible = self.backlog.pop(0)
         assert eligible, "Non-eligible packet forwarded."
         # Examine the next packet.
-        next_eligible = len(self.backlog) > 0 and self.backlog[0][2]
-        return time, 0, not next_eligible, flow_idx, forwarded_number, self.next
+        next_idx, next_number, next_eligible = 0, 0, False
+        if len(self.backlog) > 0:
+            next_idx, next_number, next_eligible = self.backlog[0]
+        return time, next_idx, next_number, not next_eligible, forwarded_idx, forwarded_number, self.next
 
     def peek(self, time):
         # Return the size of backlogged packets.
