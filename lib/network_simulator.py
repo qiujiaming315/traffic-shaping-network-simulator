@@ -195,13 +195,17 @@ class NetworkSimulator:
             if event.event_type == EventType.ARRIVAL:
                 # Start a busy period by creating a forward event if the component is idle upon arrival.
                 if event.component.arrive(event.time, event.packet_number, event.flow_idx, event.internal):
-                    forward_event = Event(event.time, EventType.FORWARD, component=event.component)
+                    forward_event = Event(event.time, EventType.FORWARD, packet_number=event.packet_number,
+                                          component=event.component)
                     heapq.heappush(self.event_pool, forward_event)
             elif event.event_type == EventType.FORWARD:
-                next_depart, idle, flow_idx, packet_number, next_component = event.component.forward(event.time)
+                next_depart, next_number, idle, flow_idx, forwarded_number, next_component = event.component.forward(
+                    event.time,
+                    event.packet_number)
                 # Submit the next forward event if the component is currently busy.
                 if not idle:
-                    forward_event = Event(next_depart, EventType.FORWARD, component=event.component)
+                    forward_event = Event(next_depart, EventType.FORWARD, packet_number=next_number,
+                                          component=event.component)
                     heapq.heappush(self.event_pool, forward_event)
                 # Create a packet arrival event for the next component.
                 departed = next_component is not None
@@ -214,23 +218,23 @@ class NetworkSimulator:
                     ms_arrival = is_next_ms and not is_internal_tb
                     interleaved_arrival = is_next_interleaved and not is_internal_ms
                     if not (is_terminal or ms_arrival):
-                        arrival_event = Event(event.time, EventType.ARRIVAL, flow_idx, packet_number, next_component,
+                        arrival_event = Event(event.time, EventType.ARRIVAL, flow_idx, forwarded_number, next_component,
                                               internal=is_internal_ms)
                         heapq.heappush(self.event_pool, arrival_event)
                     if ms_arrival or interleaved_arrival:
                         ms_component = next_component if ms_arrival else next_component.multi_slope_shapers[flow_idx]
                         # Create an arrival event for every token bucket of the multi-slope shaper.
                         for tb in ms_component.token_buckets:
-                            arrival_event = Event(event.time, EventType.ARRIVAL, flow_idx, packet_number, tb)
+                            arrival_event = Event(event.time, EventType.ARRIVAL, flow_idx, forwarded_number, tb)
                             heapq.heappush(self.event_pool, arrival_event)
                     # Record the packet departure time.
                     if not (is_internal_tb or is_internal_ms) and self.keep_per_hop_departure:
-                        self.departure_time[flow_idx][packet_number].append(event.time)
+                        self.departure_time[flow_idx][forwarded_number].append(event.time)
                     # Update the packet count and compute end-to-end latency.
                     if is_terminal:
-                        self.packet_count[flow_idx] = packet_number + 1
-                        self.end_to_end_delay[flow_idx][packet_number] = event.time - self.arrival_time[flow_idx][
-                            packet_number]
+                        self.packet_count[flow_idx] = forwarded_number + 1
+                        self.end_to_end_delay[flow_idx][forwarded_number] = event.time - self.arrival_time[flow_idx][
+                            forwarded_number]
             elif event.event_type == EventType.SUMMARY:
                 break
         # Track the maximum backlog size at each link scheduler.

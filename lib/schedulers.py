@@ -35,30 +35,30 @@ class Scheduler(NetworkComponent):
         # Function to add packets to the scheduler buffer.
         return
 
-    def forward(self, time):
+    def forward(self, time, packet_number):
         if len(self.backlog) == 0:
             # Redundant forward event. Ignore.
-            return time, self.idle, 0, 0, None
+            return time, 0, self.idle, 0, 0, None
         # Update the last packet departure time.
         self.depart = time
-        packet_number, flow_idx, next_component = 0, 0, None
+        forwarded_number, flow_idx, next_component = 0, 0, None
         if self.idle:
             # Initiate a busy period.
             self.idle = False
         else:
             # Release the forwarded packet.
             packet = heapq.heappop(self.backlog)
-            packet_number, flow_idx = packet.packet_number, packet.flow_idx
+            forwarded_number, flow_idx = packet.packet_number, packet.flow_idx
             next_component = self.next[flow_idx]
             if len(self.backlog) == 0:
                 # Terminate a busy period.
                 self.idle = True
-                return time, self.idle, flow_idx, packet_number, next_component
+                return time, 0, self.idle, flow_idx, forwarded_number, next_component
         # Examine the next packet.
         packet = self.backlog[0]
         next_arrival, next_flow = packet.arrival_time, packet.flow_idx
         next_depart = max(next_arrival, self.depart) + self.packet_size[next_flow] / self.bandwidth
-        return next_depart, self.idle, flow_idx, packet_number, next_component
+        return next_depart, 0, self.idle, flow_idx, forwarded_number, next_component
 
     def peek(self, time):
         # Return the size of backlogged packets.
