@@ -17,9 +17,9 @@ def getargs():
                       help="Total simulation time (in seconds).")
     args.add_argument('--scheduling-policy', type=str, default="fifo",
                       help="Type of scheduler applied at each hop of the network. Choose between 'fifo' and 'sced'.")
-    args.add_argument('--shaping-mode', type=str, default="per_flow",
-                      help="Type of traffic shapers applied. Choose among 'per_flow', 'interleaved', 'ingress',"
-                           "and 'none'. Only active when scheduling policy is 'fifo'")
+    args.add_argument('--shaping-mode', type=str, default="pfs",
+                      help="Type of traffic shapers applied. Choose among 'pfs', 'ils', 'is', 'itb',"
+                           "and 'ntb'. Only active when scheduling policy is 'fifo'")
     args.add_argument('--buffer-bound', type=str, default='infinite',
                       help="Link buffer bound. Choose between 'infinite', and 'with_shaping'.")
     args.add_argument('--arrival-pattern-type', type=str, default="sync_burst",

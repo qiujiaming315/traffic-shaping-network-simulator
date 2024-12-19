@@ -9,7 +9,7 @@ class RLNetworkEnv:
     """A network environment for RL sampling similar to a openai.gym environment."""
 
     def __init__(self, flow_profile, flow_path, reprofiling_delay, simulation_time=1000, scheduling_policy="fifo",
-                 shaping_mode="per_flow", buffer_bound="infinite", arrival_pattern_type="sync_burst", awake_dur=None,
+                 shaping_mode="pfs", buffer_bound="infinite", arrival_pattern_type="sync_burst", awake_dur=None,
                  awake_dist="exponential", sync_jitter=0, arrival_pattern=None, keep_per_hop_departure=True,
                  scaling_factor=1.0, packet_size=1, tor=0.003, pause_interval=1, high_reward=1, low_reward=0.1,
                  penalty=-10):
@@ -55,14 +55,14 @@ class RLNetworkEnv:
 
         # Enforce the reprofiling control actions.
         if self.simulator.scheduling_policy == "fifo":
-            if self.simulator.shaping_mode in ["per_flow", "interleaved", "ingress"]:
+            if self.simulator.shaping_mode in ["pfs", "ils", "is", "ntb"]:
                 for flow_idx, a in enumerate(action):
                     activate_reprofiler(self.simulator.ingress_reprofilers[flow_idx], a)
-                    if self.simulator.shaping_mode == "per_flow":
+                    if self.simulator.shaping_mode in ["pfs", "ntb"]:
                         flow_links = self.simulator.flow_path[flow_idx]
                         for link_idx in flow_links:
                             activate_reprofiler(self.simulator.reprofilers[(link_idx, flow_idx)], a)
-                    elif self.simulator.shaping_mode == "interleaved":
+                    elif self.simulator.shaping_mode == "ils":
                         flow_links = self.simulator.flow_path[flow_idx]
                         for cur_link, next_link in zip(flow_links[:-1], flow_links[1:]):
                             activate_reprofiler(
@@ -83,17 +83,17 @@ class RLNetworkEnv:
             token_num = tb.peek(self.time)
             state.append(token_num * p)
         if self.simulator.scheduling_policy == "fifo":
-            if self.simulator.shaping_mode in ["per_flow", "interleaved", "ingress"]:
-                reprofiler_num = 1 if self.simulator.shaping_mode == "ingress" else self.simulator.num_link + 1
+            if self.simulator.shaping_mode in ["pfs", "ils", "is", "ntb"]:
+                reprofiler_num = 1 if self.simulator.shaping_mode == "is" else self.simulator.num_link + 1
                 reprofiler_backlog = [[0] * reprofiler_num for _ in range(self.simulator.num_flow)]
                 for flow_idx, flow_links in enumerate(self.simulator.flow_path):
                     ingress_rb = self.simulator.ingress_reprofilers[flow_idx].peek(self.time)
                     reprofiler_backlog[flow_idx][0] = ingress_rb * self.simulator.packet_size[flow_idx]
-                    if self.simulator.shaping_mode == "interleaved":
+                    if self.simulator.shaping_mode == "ils":
                         for cur_link, next_link in zip(flow_links[:-1], flow_links[1:]):
                             rb = self.simulator.reprofilers[(cur_link, next_link)].peek(self.time)
                             reprofiler_backlog[flow_idx][next_link + 1] = rb
-                    elif self.simulator.shaping_mode == "per_flow":
+                    elif self.simulator.shaping_mode in ["pfs", "ntb"]:
                         for link_idx in flow_links:
                             rb = self.simulator.reprofilers[(link_idx, flow_idx)].peek(self.time)
                             reprofiler_backlog[flow_idx][link_idx + 1] = rb * self.simulator.packet_size[flow_idx]
@@ -105,7 +105,7 @@ class RLNetworkEnv:
         for flow_idx in range(self.simulator.num_flow):
             state = states[flow_idx]
             if self.simulator.scheduling_policy == "fifo":
-                if self.simulator.shaping_mode in ["per_flow", "interleaved", "ingress"]:
+                if self.simulator.shaping_mode in ["pfs", "ils", "is", "ntb"]:
                     rb = reprofiler_backlog[flow_idx]
                     state.extend(rb)
             sb = scheduler_backlog[flow_idx]
@@ -137,13 +137,13 @@ class RLNetworkEnv:
             heapq.heappush(self.simulator.event_pool, event)
         # Set the initial state.
         if self.simulator.scheduling_policy == "fifo":
-            if self.simulator.shaping_mode in ["per_flow", "interleaved"]:
+            if self.simulator.shaping_mode in ["pfs", "ils", "ntb"]:
                 # Token num, ingress shaper backlog, per-hop shaper backlog, per-hop scheduler backlog
                 state_size = 2 * self.simulator.num_link + 2
-            elif self.simulator.shaping_mode == "ingress":
+            elif self.simulator.shaping_mode == "is":
                 # Token num, ingress shaper backlog, per-hop scheduler backlog
                 state_size = self.simulator.num_link + 2
-            elif self.simulator.shaping_mode == "none":
+            elif self.simulator.shaping_mode == "itb":
                 # Token num, per-hop scheduler backlog
                 state_size = self.simulator.num_link + 1
         elif self.simulator.scheduling_policy == "sced":

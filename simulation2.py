@@ -26,7 +26,7 @@ def load_flow(flow_dir, route_dir, file_idx):
 
 
 def simulation(flow_profile, flow_route, reprofiling_delay, simulation_time=100.0, scheduling_policy="fifo",
-               shaping_mode="per_flow", buffer_bound="infinite", arrival_pattern_type="sync_burst", awake_dur=10.0,
+               shaping_mode="pfs", buffer_bound="infinite", arrival_pattern_type="sync_burst", awake_dur=10.0,
                awake_dist="exponential", sync_jitter=0, arrival_pattern=None, keep_per_hop_departure=False,
                scaling_factor=1.0, packet_size=1.0):
     simulator = NetworkSimulator(flow_profile, flow_route, reprofiling_delay, simulation_time=simulation_time,
@@ -50,7 +50,7 @@ def simulation(flow_profile, flow_route, reprofiling_delay, simulation_time=100.
 
 
 def batch_simulation(flow_dir, route_dir, save_dir, start, end, simulation_time=100.0,
-                     scheduling_policy="fifo", shaping_mode="per_flow", buffer_bound="infinite",
+                     scheduling_policy="fifo", shaping_mode="pfs", buffer_bound="infinite",
                      arrival_pattern_type="sync", awake_dur=10.0, awake_dist="exponential", sync_jitter=0,
                      scaling_factor=1.0, arrival_pattern=None, packet_size=1.0):
     if save_dir != "":
@@ -82,9 +82,9 @@ def batch_simulation(flow_dir, route_dir, save_dir, start, end, simulation_time=
             data = {"arrival_time": arrival_time, "end_to_end_delay": end_to_end_delay,
                     "latency_target": latency_target, "scheduler_backlog": scheduler_backlog, "time": time_taken}
             if scheduling_policy == "fifo":
-                if shaping_mode in ["per_flow", "interleaved", "ingress"]:
+                if shaping_mode in ["pfs", "ils", "is", "ntb"]:
                     data["ingress_reprofiler_backlog"] = simulator.ingress_reprofiler_max_backlog
-                if shaping_mode in ["per_flow", "interleaved"]:
+                if shaping_mode in ["pfs", "ils", "ntb"]:
                     data["reprofiler_backlog"] = simulator.reprofiler_max_backlog
             if save_dir != "":
                 with open(file_name, 'wb') as f:
