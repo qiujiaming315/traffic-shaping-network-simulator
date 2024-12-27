@@ -396,8 +396,6 @@ class NetworkSimulator:
             self.arrival_pattern = arrival_pattern
         elif not self.repeat:
             self.arrival_pattern = self.generate_arrival_pattern()
-        for token_bucket in self.token_buckets:
-            token_bucket.reset()
         for scheduler in self.schedulers:
             scheduler.reset()
         if self.scheduling_policy == "fifo":
@@ -419,6 +417,9 @@ class NetworkSimulator:
         if self.repeat and arrival_pattern is None:
             self.event_pool = copy.deepcopy(self.event_pool_copy)
         else:
+            # Reset the token bucket states.
+            for token_bucket in self.token_buckets:
+                token_bucket.reset()
             # Add packet arrival events to the event pool.
             self.arrival_time = []
             for flow_idx, fluid_arrival in enumerate(self.arrival_pattern):
