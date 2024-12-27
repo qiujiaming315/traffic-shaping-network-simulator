@@ -33,7 +33,7 @@ def plot_delay_statistics(x_data, y_data, labels, output_path, fig_name, y_err=N
     num_line = len(y_values)
     # colors = ["#7FB3D5", "#F7CAC9", "#A2C8B5", "#D9AFD9", "#D3D3D3", "#FFFF99", "#FFD1DC", "#9AD1D4", "#B19CD9",
     #           "#B0AFAF"]
-    colors = ["#F7CAC9", "#D9AFD9"]
+    colors = ["#F7CAC9", "#D3D3D3"]
     assert len(colors) >= num_line, "Too many lines to visualize."
     if y_err is None:
         for y_value, color, label in zip(y_values, colors, labels):
@@ -56,7 +56,7 @@ def plot_delay_statistics(x_data, y_data, labels, output_path, fig_name, y_err=N
         axins.yaxis.set_major_formatter(mtick.PercentFormatter())
         for y_value, err, color, label in zip(y_values, y_err, colors, labels):
             axins.errorbar(x_values, y_value, err, fmt='o-', color=color, label=label, linewidth=3, markersize=15,
-                        ecolor=color, elinewidth=3, capsize=9, capthick=3)
+                           ecolor=color, elinewidth=3, capsize=9, capthick=3)
         ax.indicate_inset_zoom(axins, edgecolor="#606060")
     plt.legend(fontsize=35)
     plt.tight_layout()
@@ -66,12 +66,12 @@ def plot_delay_statistics(x_data, y_data, labels, output_path, fig_name, y_err=N
     return
 
 
-def plot_delay_distribution(end_to_end_delay, output_path, fig_name):
+def plot_delay_distribution(end_to_end_delay, output_path, fig_name, bins, x_range=None, y_range=None):
     ax = setup_axis()
     ax.set_ylabel("Frequency", labelpad=10, color='#333333', size=40)
     ax.set_xlabel("End-to-end Delay / Delay Bound", labelpad=15, color='#333333', size=40)
     # ax.xaxis.set_major_formatter(mtick.PercentFormatter())
-    ax.hist(end_to_end_delay, 100, color="blue", weights=np.ones_like(end_to_end_delay) / end_to_end_delay.size,
+    ax.hist(end_to_end_delay, bins, color="blue", weights=np.ones_like(end_to_end_delay) / end_to_end_delay.size,
             label="distribution")
     violation = np.sum(end_to_end_delay > 1) / len(end_to_end_delay)
     ax.axvline(end_to_end_delay.mean(), color="#00CC00", alpha=0.5, linewidth=4, label="average")
@@ -85,6 +85,32 @@ def plot_delay_distribution(end_to_end_delay, output_path, fig_name):
     title = "No delay violation" if violation == 0 else f"{violation * 100: .1f} % delay violation"
     ax.set_title(title, color='#333333', pad=20, size=55)
     plt.legend(fontsize=30)
+    if x_range is not None:
+        ax.set_xlim(*x_range)
+    if y_range is not None:
+        ax.set_ylim(*y_range)
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_path, fig_name + ".png"), bbox_inches='tight')
+    plt.savefig(os.path.join(output_path, fig_name + ".pdf"), bbox_inches='tight')
+    plt.clf()
+    return
+
+
+def plot_two_delay_distribution(end_to_end_delay1, end_to_end_delay2, label1, label2, output_path, fig_name, bins,
+                                x_range=None, y_range=None):
+    ax = setup_axis()
+    ax.set_ylabel("Frequency", labelpad=10, color='#333333', size=40)
+    ax.set_xlabel("End-to-end Delay / Delay Bound", labelpad=15, color='#333333', size=40)
+    # ax.xaxis.set_major_formatter(mtick.PercentFormatter())
+    ax.hist(end_to_end_delay1, bins, color="blue", alpha=0.5,
+            weights=np.ones_like(end_to_end_delay1) / end_to_end_delay1.size, label=label1)
+    ax.hist(end_to_end_delay2, bins, color="red", alpha=0.5,
+            weights=np.ones_like(end_to_end_delay2) / end_to_end_delay2.size, label=label2)
+    plt.legend(fontsize=35)
+    if x_range is not None:
+        ax.set_xlim(*x_range)
+    if y_range is not None:
+        ax.set_ylim(*y_range)
     plt.tight_layout()
     plt.savefig(os.path.join(output_path, fig_name + ".png"), bbox_inches='tight')
     plt.savefig(os.path.join(output_path, fig_name + ".pdf"), bbox_inches='tight')

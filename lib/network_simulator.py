@@ -1,3 +1,4 @@
+import copy
 import heapq
 import numpy as np
 from collections import defaultdict
@@ -15,7 +16,7 @@ class NetworkSimulator:
     def __init__(self, flow_profile, flow_path, reprofiling_delay, simulation_time=1000, scheduling_policy="fifo",
                  shaping_mode="pfs", buffer_bound="infinite", arrival_pattern_type="sync_burst", awake_dur=None,
                  awake_dist="exponential", sync_jitter=0, arrival_pattern=None, keep_per_hop_departure=True,
-                 scaling_factor=1.0, packet_size=1, tor=0.003):
+                 repeat=True, scaling_factor=1.0, packet_size=1, tor=0.003):
         flow_profile = np.array(flow_profile)
         flow_path = np.array(flow_path)
         reprofiling_delay = np.array(reprofiling_delay)
@@ -45,6 +46,7 @@ class NetworkSimulator:
             assert self.awake_dur > 0, "Please set a positive awake duration if the distribution is exponential."
         self.sync_jitter = sync_jitter
         self.keep_per_hop_departure = keep_per_hop_departure
+        self.repeat = repeat
         self.scaling_factor = scaling_factor
         if isinstance(packet_size, Iterable):
             assert len(packet_size) == self.num_flow, "Please set the packet size either as a single value, " \
@@ -191,6 +193,10 @@ class NetworkSimulator:
         else:
             self.departure_time = None
         self.end_to_end_delay = [[-1] * len(self.arrival_time[flow_idx]) for flow_idx in range(self.num_flow)]
+        # Keep the initial event pool for restoration upon resetting if repeatable.
+        self.event_pool_copy = None
+        if self.repeat:
+            self.event_pool_copy = copy.deepcopy(self.event_pool)
         return
 
     def simulate(self):
@@ -386,7 +392,10 @@ class NetworkSimulator:
         return arrival_pattern
 
     def reset(self, arrival_pattern=None):
-        self.arrival_pattern = self.generate_arrival_pattern() if arrival_pattern is None else arrival_pattern
+        if arrival_pattern is not None:
+            self.arrival_pattern = arrival_pattern
+        elif not self.repeat:
+            self.arrival_pattern = self.generate_arrival_pattern()
         for token_bucket in self.token_buckets:
             token_bucket.reset()
         for scheduler in self.schedulers:
@@ -406,21 +415,25 @@ class NetworkSimulator:
             if self.shaping_mode in ["pfs", "ils", "ntb"]:
                 self.reprofiler_max_backlog = [0] * len(self.reprofilers)
         self.event_pool = []
-        # Add packet arrival events to the event pool.
-        self.arrival_time = []
-        for flow_idx, fluid_arrival in enumerate(self.arrival_pattern):
-            flow_arrival = self.token_buckets[flow_idx].forward(fluid_arrival)
-            self.arrival_time.append(flow_arrival)
-            for packet_number, arrival in enumerate(flow_arrival):
-                if self.scheduling_policy == "fifo" and self.shaping_mode in ["pfs", "ils", "is", "ntb"]:
-                    first_reprofiler = self.ingress_reprofilers[flow_idx]
-                    for tb in first_reprofiler.token_buckets:
-                        event = Event(arrival, EventType.ARRIVAL, flow_idx, packet_number, tb)
+        # Restore the initial event pool if repeating the previous simulation.
+        if self.repeat and arrival_pattern is None:
+            self.event_pool = copy.deepcopy(self.event_pool_copy)
+        else:
+            # Add packet arrival events to the event pool.
+            self.arrival_time = []
+            for flow_idx, fluid_arrival in enumerate(self.arrival_pattern):
+                flow_arrival = self.token_buckets[flow_idx].forward(fluid_arrival)
+                self.arrival_time.append(flow_arrival)
+                for packet_number, arrival in enumerate(flow_arrival):
+                    if self.scheduling_policy == "fifo" and self.shaping_mode in ["pfs", "ils", "is", "ntb"]:
+                        first_reprofiler = self.ingress_reprofilers[flow_idx]
+                        for tb in first_reprofiler.token_buckets:
+                            event = Event(arrival, EventType.ARRIVAL, flow_idx, packet_number, tb)
+                            heapq.heappush(self.event_pool, event)
+                    else:
+                        first_scheduler = self.schedulers[self.flow_path[flow_idx][0]]
+                        event = Event(arrival, EventType.ARRIVAL, flow_idx, packet_number, first_scheduler)
                         heapq.heappush(self.event_pool, event)
-                else:
-                    first_scheduler = self.schedulers[self.flow_path[flow_idx][0]]
-                    event = Event(arrival, EventType.ARRIVAL, flow_idx, packet_number, first_scheduler)
-                    heapq.heappush(self.event_pool, event)
         if self.keep_per_hop_departure:
             self.departure_time = [[[] for _ in range(len(self.arrival_time[flow_idx]))] for flow_idx in
                                    range(self.num_flow)]

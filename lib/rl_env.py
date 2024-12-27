@@ -11,21 +11,21 @@ class RLNetworkEnv:
     def __init__(self, flow_profile, flow_path, reprofiling_delay, simulation_time=1000, scheduling_policy="fifo",
                  shaping_mode="pfs", buffer_bound="infinite", arrival_pattern_type="sync_burst", awake_dur=None,
                  awake_dist="exponential", sync_jitter=0, arrival_pattern=None, keep_per_hop_departure=True,
-                 scaling_factor=1.0, packet_size=1, tor=0.003, pause_interval=1, high_reward=1, low_reward=0.1,
-                 penalty=-10):
+                 repeat=True, scaling_factor=1.0, packet_size=1, tor=0.003, pause_interval=1, high_reward=1,
+                 low_reward=0.1, penalty=-10):
         self.simulator = NetworkSimulator(flow_profile, flow_path, reprofiling_delay, simulation_time=simulation_time,
                                           scheduling_policy=scheduling_policy, shaping_mode=shaping_mode,
                                           buffer_bound=buffer_bound, arrival_pattern_type=arrival_pattern_type,
                                           awake_dur=awake_dur, awake_dist=awake_dist, sync_jitter=sync_jitter,
                                           arrival_pattern=arrival_pattern,
-                                          keep_per_hop_departure=keep_per_hop_departure, scaling_factor=scaling_factor,
-                                          packet_size=packet_size, tor=tor)
+                                          keep_per_hop_departure=keep_per_hop_departure, repeat=repeat,
+                                          scaling_factor=scaling_factor, packet_size=packet_size, tor=tor)
         self.pause_interval = pause_interval
         self.high_reward = high_reward
         self.low_reward = low_reward
         self.penalty = penalty
         self.time = 0
-        self.num_action = self.simulator.num_flow
+        self.num_agent = self.simulator.num_flow
         # Add a summary event at each time interval to collect a snapshot of the network.
         for time_step in np.arange(pause_interval, simulation_time + pause_interval, pause_interval):
             event = Event(time_step, EventType.SUMMARY)
