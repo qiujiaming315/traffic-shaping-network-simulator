@@ -20,6 +20,7 @@ class RLNetworkEnv:
                                           arrival_pattern=arrival_pattern,
                                           keep_per_hop_departure=keep_per_hop_departure, repeat=repeat,
                                           scaling_factor=scaling_factor, packet_size=packet_size, tor=tor)
+        self.repeat = repeat
         self.pause_interval = pause_interval
         self.high_reward = high_reward
         self.low_reward = low_reward
@@ -30,6 +31,10 @@ class RLNetworkEnv:
         for time_step in np.arange(pause_interval, simulation_time + pause_interval, pause_interval):
             event = Event(time_step, EventType.SUMMARY)
             heapq.heappush(self.simulator.event_pool, event)
+        # Keep the initial event pool for restoration upon resetting if repeatable.
+        self.event_pool_copy = None
+        if self.repeat:
+            self.event_pool_copy = copy.deepcopy(self.simulator.event_pool)
         return
 
     def reward_function(self, end_to_end_delay, flow_idx):
@@ -130,11 +135,15 @@ class RLNetworkEnv:
     def reset(self, arrival_pattern=None):
         self.simulator.reset(arrival_pattern=arrival_pattern)
         self.time = 0
-        # Add a summary event at each time interval to collect a snapshot of the network.
-        for time_step in np.arange(self.pause_interval, self.simulator.simulation_time + self.pause_interval,
-                                   self.pause_interval):
-            event = Event(time_step, EventType.SUMMARY)
-            heapq.heappush(self.simulator.event_pool, event)
+        # Restore the initial event pool if repeating the previous episode.
+        if self.repeat and arrival_pattern is None:
+            self.simulator.event_pool = copy.deepcopy(self.event_pool_copy)
+        else:
+            # Add a summary event at each time interval to collect a snapshot of the network.
+            for time_step in np.arange(self.pause_interval, self.simulator.simulation_time + self.pause_interval,
+                                       self.pause_interval):
+                event = Event(time_step, EventType.SUMMARY)
+                heapq.heappush(self.simulator.event_pool, event)
         # Set the initial state.
         if self.simulator.scheduling_policy == "fifo":
             if self.simulator.shaping_mode in ["pfs", "ils", "ntb"]:
