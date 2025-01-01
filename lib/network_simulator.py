@@ -16,7 +16,7 @@ class NetworkSimulator:
     def __init__(self, flow_profile, flow_path, reprofiling_delay, simulation_time=1000, scheduling_policy="fifo",
                  shaping_mode="pfs", buffer_bound="infinite", arrival_pattern_type="sync_burst", awake_dur=None,
                  awake_dist="exponential", sync_jitter=0, arrival_pattern=None, keep_per_hop_departure=True,
-                 repeat=True, scaling_factor=1.0, packet_size=1, tor=0.003):
+                 repeat=False, scaling_factor=1.0, packet_size=1, tor=0.003):
         flow_profile = np.array(flow_profile)
         flow_path = np.array(flow_path)
         reprofiling_delay = np.array(reprofiling_delay)
