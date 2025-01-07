@@ -54,7 +54,8 @@ class RLNetworkEnv:
             # Add a packet forward event if the shaper is turned off.
             if not a:
                 for tb in reprofiler.token_buckets:
-                    event = Event(self.time, EventType.FORWARD, component=tb)
+                    tb_packet_number = 0 if len(tb.backlog) == 0 else tb.backlog[0][1]
+                    event = Event(self.time, EventType.FORWARD, reprofiler.flow_idx, tb_packet_number, tb)
                     heapq.heappush(self.simulator.event_pool, event)
             return
 

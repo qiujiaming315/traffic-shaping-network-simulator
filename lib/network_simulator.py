@@ -460,4 +460,5 @@ class Event:
     internal: bool = False
 
     def __lt__(self, other):
-        return (self.time, self.event_type.value, self.internal) < (other.time, other.event_type.value, other.internal)
+        return (self.time, self.event_type.value, self.internal, self.packet_number) < (
+            other.time, other.event_type.value, other.internal, other.packet_number)
