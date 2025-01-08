@@ -181,4 +181,4 @@ class Packet:
     flow_idx: int
 
     def __lt__(self, other):
-        return self.rank < other.rank
+        return (self.rank, self.packet_number) < (other.rank, other.packet_number)
