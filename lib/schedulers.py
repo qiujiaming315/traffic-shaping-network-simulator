@@ -37,8 +37,8 @@ class Scheduler(NetworkComponent):
 
     def forward(self, time, packet_number, component_idx):
         # Check if the packet to forward has the right flow index and packet sequence number.
-        if len(self.backlog) == 0 or (
-                self.backlog[0].flow_idx != component_idx or self.backlog[0].packet_number != packet_number):
+        if (len(self.backlog) == 0 and self.next_packet is None) or (self.next_packet is not None and (
+                self.next_packet.flow_idx != component_idx or self.next_packet.packet_number != packet_number)):
             # Redundant forward event. Ignore.
             return time, 0, 0, self.idle, 0, 0, None
         # Update the last packet departure time.
