@@ -8,9 +8,10 @@ from lib.traffic_shapers import NetworkComponent
 class Scheduler(NetworkComponent):
     """Parent class of network schedulers."""
 
-    def __init__(self, bandwidth, packet_size, buffer_size=None):
+    def __init__(self, bandwidth, packet_size, propagation_delay=0, buffer_size=None):
         self.bandwidth = bandwidth
         self.packet_size = packet_size
+        self.propagation_delay = propagation_delay
         self.buffer_size = buffer_size
         self.num_flow = len(packet_size)
         self.backlog = []
@@ -81,8 +82,8 @@ class Scheduler(NetworkComponent):
 class FIFOScheduler(Scheduler):
     """FIFO Scheduler."""
 
-    def __init__(self, bandwidth, packet_size, buffer_size=None):
-        super().__init__(bandwidth, packet_size, buffer_size=buffer_size)
+    def __init__(self, bandwidth, packet_size, propagation_delay=0, buffer_size=None):
+        super().__init__(bandwidth, packet_size, propagation_delay=propagation_delay, buffer_size=buffer_size)
         return
 
     def add_packet(self, time, packet_number, component_idx):
@@ -151,8 +152,8 @@ class MultiSlopeShaperSCED:
 class SCEDScheduler(Scheduler):
     """SCED scheduler."""
 
-    def __init__(self, bandwidth, packet_size, offset, *args, buffer_size=None):
-        super().__init__(bandwidth, packet_size, buffer_size=buffer_size)
+    def __init__(self, bandwidth, packet_size, offset, *args, propagation_delay=0, buffer_size=None):
+        super().__init__(bandwidth, packet_size, propagation_delay=propagation_delay, buffer_size=buffer_size)
         self.multi_slope_shapers = [MultiSlopeShaperSCED()] * self.num_flow
         for flow_idx, ms in args:
             assert isinstance(ms, MultiSlopeShaperSCED), "Every argument passed into SCEDScheduler " \
