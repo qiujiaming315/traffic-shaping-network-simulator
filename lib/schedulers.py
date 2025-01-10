@@ -19,6 +19,7 @@ class Scheduler(NetworkComponent):
         self.terminal = [False] * self.num_flow
         super().__init__()
         self.next = [None] * self.num_flow
+        self.next_packet = None
         return
 
     def arrive(self, time, packet_number, component_idx, is_internal):
@@ -49,16 +50,17 @@ class Scheduler(NetworkComponent):
             self.idle = False
         else:
             # Release the forwarded packet.
-            packet = heapq.heappop(self.backlog)
-            forwarded_number, forwarded_idx = packet.packet_number, packet.flow_idx
+            forwarded_number, forwarded_idx = self.next_packet.packet_number, self.next_packet.flow_idx
             next_component = self.next[forwarded_idx]
             if len(self.backlog) == 0:
                 # Terminate a busy period.
                 self.idle = True
+                self.next_packet = None
                 return time, 0, 0, self.idle, forwarded_idx, forwarded_number, next_component
         # Examine the next packet.
-        packet = self.backlog[0]
-        next_arrival, next_idx, next_number = packet.arrival_time, packet.flow_idx, packet.packet_number
+        next_packet = heapq.heappop(self.backlog)
+        next_arrival, next_idx, next_number = next_packet.arrival_time, next_packet.flow_idx, next_packet.packet_number
+        self.next_packet = next_packet
         next_depart = max(next_arrival, self.depart) + self.packet_size[next_idx] / self.bandwidth
         return next_depart, next_idx, next_number, self.idle, forwarded_idx, forwarded_number, next_component
 
@@ -71,6 +73,7 @@ class Scheduler(NetworkComponent):
         self.backlog = []
         self.max_backlog_size = 0
         self.depart = 0
+        self.next_packet = None
         super().reset()
         return
 
