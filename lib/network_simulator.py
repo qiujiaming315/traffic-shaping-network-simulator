@@ -141,7 +141,8 @@ class NetworkSimulator:
         # Compute the expected latency bound (with small tolerance for numerical instability).
         # Compute packetization delay from schedulers.
         packetization_delay = np.sum(self.link_packetization_delay * (flow_path > 0), axis=1)
-        self.latency_target = (flow_profile[:, 2] + packetization_delay) * (1 + tor)
+        total_propagation_delay = np.sum(self.propagation_delay * (flow_path > 0), axis=1)
+        self.latency_target = (flow_profile[:, 2] + packetization_delay + total_propagation_delay) * (1 + tor)
         # self.latency_target = (reprofiling_delay + packetization_delay) * (1 + tor)
         # Connect the network components.
         for flow_idx, flow_links in enumerate(self.flow_path):
