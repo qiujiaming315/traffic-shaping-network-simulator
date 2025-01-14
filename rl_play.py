@@ -22,13 +22,24 @@ def getargs():
                            "and 'ntb'. Only active when scheduling policy is 'fifo'")
     args.add_argument('--buffer-bound', type=str, default='infinite',
                       help="Link buffer bound. Choose between 'infinite', and 'with_shaping'.")
-    args.add_argument('--arrival-pattern-type', type=str, default="sync_burst",
-                      help="Type of traffic arrival pattern. Choose among 'sync_burst', 'sync_smooth', and 'async'.")
-    args.add_argument('--awake-dur', type=float, default=None, help="Flow awake time.")
-    args.add_argument('--awake-dist', type=str, default="constant",
-                      help="Flow awake time distribution. Choose between 'exponential' and 'constant'.")
+    args.add_argument('--arrival-pattern-type', type=str, default="sync",
+                      help="Type of traffic arrival pattern. Choose between 'sync' and 'async'.")
     args.add_argument('--sync-jitter', type=float, default=0,
                       help="Jitter for synchronized flow burst. Only active when the arrival pattern is 'sync_burst'.")
+    args.add_argument('--periodic-arrival-ratio', type=float, default=1.0,
+                      help="Percent of flows that have periodic arrival patterns. Non-periodic flows send the maximum"
+                           "amount of traffic throughout the simulation.")
+    args.add_argument('--awake-prob-choice', type=float, default=1.0, nargs='+',
+                      help="Choices of probability that periodic flows awake at the beginning of each period.")
+    args.add_argument('--awake-prob-sample-weight', type=float, default=1.0, nargs='+',
+                      help="The sampling weight of each choice of flow awake probability.")
+    args.add_argument('--awake-dur', type=float, default=None, help="Length of awake time of periodic flows.")
+    args.add_argument('--awake-dist', type=str, default="constant",
+                      help="Periodic flow awake time distribution. Choose between 'exponential' and 'constant'.")
+    args.add_argument('--sleep-dur', type=str, default=None, help="Length of sleep time of periodic flows. Can be set"
+                                                                  "to 'min', 'max', or a number.")
+    args.add_argument('--sleep-dist', type=str, default="constant",
+                      help="Periodic flow sleep time distribution. Choose between 'uniform' and 'constant'.")
     args.add_argument('--pause-interval', type=float, default=1,
                       help="The length of a time step (in second) for the reinforcement learning environment.")
     args.add_argument('--high-reward', type=float, default=1,
@@ -55,10 +66,13 @@ if __name__ == '__main__':
     environment = RLNetworkEnv(flow_profile, flow_route, shaping_delay, simulation_time=args.simulation_time,
                                scheduling_policy=args.scheduling_policy, shaping_mode=args.shaping_mode,
                                buffer_bound=args.buffer_bound, arrival_pattern_type=args.arrival_pattern_type,
-                               awake_dur=args.awake_dur, awake_dist=args.awake_dist, sync_jitter=args.sync_jitter,
-                               arrival_pattern=None, keep_per_hop_departure=False, scaling_factor=1.0,
-                               packet_size=1, pause_interval=args.pause_interval, high_reward=args.high_reward,
-                               low_reward=args.low_reward, penalty=args.penalty)
+                               sync_jitter=args.sync_jitter, periodic_arrival_ratio=args.periodic_arrival_ratio,
+                               awake_prob_choice=tuple(args.awake_prob_choice),
+                               awake_prob_sample_weight=tuple(args.awake_prob_sample_weight),
+                               awake_dur=args.awake_dur, awake_dist=args.awake_dist, sleep_dur=args.sleep_dur,
+                               sleep_dist=args.sleep_dist, arrival_pattern=None, keep_per_hop_departure=False,
+                               scaling_factor=1.0, packet_size=1, pause_interval=args.pause_interval,
+                               high_reward=args.high_reward, low_reward=args.low_reward, penalty=args.penalty)
     # Initialize the environment and get the initial state.
     initial_state = environment.reset()
     # Keep iterating until the end of an episode.
