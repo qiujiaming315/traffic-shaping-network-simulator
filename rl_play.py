@@ -33,10 +33,10 @@ def getargs():
                       help="Choices of probability that periodic flows awake at the beginning of each period.")
     args.add_argument('--awake-prob-sample-weight', type=float, default=1.0, nargs='+',
                       help="The sampling weight of each choice of flow awake probability.")
-    args.add_argument('--awake-dur', type=float, default=None, help="Length of awake time of periodic flows.")
+    args.add_argument('--awake-dur', type=float, default=0.0, help="Length of awake time of periodic flows.")
     args.add_argument('--awake-dist', type=str, default="constant",
                       help="Periodic flow awake time distribution. Choose between 'exponential' and 'constant'.")
-    args.add_argument('--sleep-dur', type=str, default=None, help="Length of sleep time of periodic flows. Can be set"
+    args.add_argument('--sleep-dur', type=str, default='max', help="Length of sleep time of periodic flows. Can be set"
                                                                   "to 'min', 'max', or a number.")
     args.add_argument('--sleep-dist', type=str, default="constant",
                       help="Periodic flow sleep time distribution. Choose between 'uniform' and 'constant'.")
