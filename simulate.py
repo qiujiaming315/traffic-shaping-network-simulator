@@ -32,9 +32,9 @@ def getargs():
     args.add_argument('--periodic-arrival-ratio', type=float, default=1.0,
                       help="Percent of flows that have periodic arrival patterns. Non-periodic flows send the maximum"
                            "amount of traffic throughout the simulation.")
-    args.add_argument('--awake-prob-choice', type=float, default=1.0, nargs='+',
+    args.add_argument('--awake-prob-choice', type=float, default=[1.0], nargs='+',
                       help="Choices of probability that periodic flows awake at the beginning of each period.")
-    args.add_argument('--awake-prob-sample-weight', type=float, default=1.0, nargs='+',
+    args.add_argument('--awake-prob-sample-weight', type=float, default=[1.0], nargs='+',
                       help="The sampling weight of each choice of flow awake probability.")
     args.add_argument('--awake-dur', type=float, default=0.0, help="Length of awake time of periodic flows.")
     args.add_argument('--awake-dist', type=str, default="constant",
