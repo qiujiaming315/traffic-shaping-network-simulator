@@ -126,7 +126,7 @@ class RLNetworkEnv:
         # Compute the reward based on the end-to-end latency and determine whether the episode terminates.
         terminate, exceed_target = True, False
         reward = 0
-        for end in enumerate(end_to_end):
+        for end in end_to_end:
             flow_reward = 0
             for e in end:
                 flow_reward += self.reward_function(e)
