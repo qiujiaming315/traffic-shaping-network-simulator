@@ -31,9 +31,9 @@ def plot_delay_statistics(x_data, y_data, labels, output_path, fig_name, y_err=N
     if percent_format_x:
         ax.xaxis.set_major_formatter(mtick.PercentFormatter())
     num_line = len(y_values)
-    # colors = ["#7FB3D5", "#F7CAC9", "#A2C8B5", "#D9AFD9", "#D3D3D3", "#FFFF99", "#FFD1DC", "#9AD1D4", "#B19CD9",
-    #           "#B0AFAF"]
-    colors = ["#F7CAC9", "#D3D3D3"]
+    colors = ["#7FB3D5", "#F7CAC9", "#A2C8B5", "#D9AFD9", "#D3D3D3", "#FFFF99", "#FFD1DC", "#9AD1D4", "#B19CD9",
+              "#B0AFAF"]
+    # colors = ["#F7CAC9", "#D3D3D3"]
     assert len(colors) >= num_line, "Too many lines to visualize."
     if y_err is None:
         for y_value, color, label in zip(y_values, colors, labels):

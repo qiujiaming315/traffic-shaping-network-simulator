@@ -81,7 +81,7 @@ if __name__ == '__main__':
         # Specify the shaping control action. Here we assume we always turn on the shapers.
         # You may train an RL agent to make the shaping control decision here.
         action = np.ones((environment.num_action,), dtype=bool)
-        next_state, reward, terminate, truncate = environment.step(action)
+        next_state, reward, terminate, truncate, _ = environment.step(action)
         # End the episode if the simulation terminates or gets truncated.
         if terminate or truncate:
             break

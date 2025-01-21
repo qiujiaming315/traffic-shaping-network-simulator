@@ -42,12 +42,11 @@ class RLNetworkEnv:
             self.event_pool_copy = copy.deepcopy(self.simulator.event_pool)
         return
 
-    def reward_function(self, end_to_end_delay, flow_idx):
+    def reward_function(self, normalized_delay):
         # Compute the reward given an end-to-end delay
         reward = 0
-        if end_to_end_delay != -1 and end_to_end_delay <= self.simulator.latency_target[flow_idx]:
-            reward = self.low_reward + (1 - end_to_end_delay / self.simulator.latency_target[flow_idx]) * (
-                    self.high_reward - self.low_reward)
+        if normalized_delay != -1 and normalized_delay <= 1:
+            reward = self.low_reward + (1 - normalized_delay) * (self.high_reward - self.low_reward)
         return reward
 
     def step(self, action):
@@ -87,7 +86,10 @@ class RLNetworkEnv:
         for flow_idx, (old_count, new_count) in enumerate(zip(packet_count_old, self.simulator.packet_count)):
             flow_end_to_end = []
             for packet_number in range(old_count, new_count):
-                flow_end_to_end.append(self.simulator.end_to_end_delay[flow_idx][packet_number])
+                packet_end_to_end = self.simulator.end_to_end_delay[flow_idx][packet_number]
+                if packet_end_to_end != -1:
+                    packet_end_to_end /= self.simulator.latency_target[flow_idx]
+                flow_end_to_end.append(packet_end_to_end)
             end_to_end.append(flow_end_to_end)
         # Record the network status.
         for state, tb, p in zip(states, self.simulator.token_buckets, self.simulator.packet_size):
@@ -124,11 +126,11 @@ class RLNetworkEnv:
         # Compute the reward based on the end-to-end latency and determine whether the episode terminates.
         terminate, exceed_target = True, False
         reward = 0
-        for flow_idx, end in enumerate(end_to_end):
+        for end in enumerate(end_to_end):
             flow_reward = 0
             for e in end:
-                flow_reward += self.reward_function(e, flow_idx)
-                if e == -1 or e > self.simulator.latency_target[flow_idx]:
+                flow_reward += self.reward_function(e)
+                if e == -1 or e > 1:
                     exceed_target = True
             if len(self.simulator.event_pool) > 0:
                 terminate = False
@@ -136,7 +138,7 @@ class RLNetworkEnv:
             reward += flow_reward
         if exceed_target:
             reward = self.penalty
-        return states, reward, terminate, exceed_target
+        return states, reward, terminate, exceed_target, end_to_end
 
     def reset(self, arrival_pattern=None):
         self.simulator.reset(arrival_pattern=arrival_pattern)
