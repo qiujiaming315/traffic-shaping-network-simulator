@@ -1,3 +1,4 @@
+import bisect
 import heapq
 import numpy as np
 from dataclasses import dataclass
@@ -8,14 +9,16 @@ from lib.traffic_shapers import NetworkComponent
 class Scheduler(NetworkComponent):
     """Parent class of network schedulers."""
 
-    def __init__(self, bandwidth, packet_size, propagation_delay=0, buffer_size=None):
+    def __init__(self, bandwidth, packet_size, busy_period_window_size=0, propagation_delay=0, buffer_size=None):
         self.bandwidth = bandwidth
         self.packet_size = packet_size
+        self.busy_period_window_size = busy_period_window_size
         self.propagation_delay = propagation_delay
         self.buffer_size = buffer_size
         self.num_flow = len(packet_size)
         self.backlog = []
         self.max_backlog_size = 0
+        self.busy_period = []
         self.depart = 0
         self.terminal = [False] * self.num_flow
         super().__init__()
@@ -25,12 +28,12 @@ class Scheduler(NetworkComponent):
 
     def arrive(self, time, packet_number, component_idx, is_internal):
         # Check if the buffer has enough space to accommodate the packet.
-        buffer_available = self.buffer_size is None or self.buffer_size >= self.packet_size[component_idx] + self.peek(
-            time)
+        buffer_available = self.buffer_size is None or self.buffer_size >= self.packet_size[
+            component_idx] + self.peek_backlog(time)
         # Add the packet and its flow index to the backlog.
         if buffer_available:
             self.add_packet(time, packet_number, component_idx)
-            self.max_backlog_size = max(self.max_backlog_size, self.peek(time))
+            self.max_backlog_size = max(self.max_backlog_size, self.peek_backlog(time))
         return self.idle
 
     def add_packet(self, time, packet_number, component_idx):
@@ -49,6 +52,7 @@ class Scheduler(NetworkComponent):
         if self.idle:
             # Initiate a busy period.
             self.idle = False
+            self.busy_period.append(time)
         else:
             # Release the forwarded packet.
             forwarded_number, forwarded_idx = self.next_packet.packet_number, self.next_packet.flow_idx
@@ -56,6 +60,7 @@ class Scheduler(NetworkComponent):
             if len(self.backlog) == 0:
                 # Terminate a busy period.
                 self.idle = True
+                self.busy_period.append(time)
                 self.next_packet = None
                 return time, 0, 0, self.idle, forwarded_idx, forwarded_number, next_component
         # Examine the next packet.
@@ -65,14 +70,35 @@ class Scheduler(NetworkComponent):
         next_depart = max(next_arrival, self.depart) + self.packet_size[next_idx] / self.bandwidth
         return next_depart, next_idx, next_number, self.idle, forwarded_idx, forwarded_number, next_component
 
-    def peek(self, time):
+    def peek_backlog(self, time):
         # Return the size of backlogged packets.
         backlog_flow = [packet.flow_idx for packet in self.backlog]
         return np.sum(self.packet_size[backlog_flow])
 
+    def peek_utlization(self, time):
+        # Return the link utilization over the last busy period window.
+        # Discard busy periods that end before the last window starts.
+        window_idx = bisect.bisect(self.busy_period, time - self.busy_period_window_size)
+        self.busy_period = self.busy_period[window_idx:]
+        if window_idx % 2 == 1:
+            # Reset the busy period start time to the start time of the last window.
+            self.busy_period.insert(0, time - self.busy_period_window_size)
+        busy_period_length = 0
+        if len(self.busy_period) % 2 == 1:
+            busy_period_length += time - self.busy_period[-1]
+        for idx in range(len(self.busy_period) // 2):
+            busy_period_length += self.busy_period[2 * idx + 1] - self.busy_period[2 * idx]
+        # Compute the utlization.
+        utilization = busy_period_length / self.busy_period_window_size
+        return utilization
+
+    def peek(self, time):
+        return self.peek_backlog(time), self.peek_utlization(time)
+
     def reset(self):
         self.backlog = []
         self.max_backlog_size = 0
+        self.busy_period = []
         self.depart = 0
         self.next_packet = None
         super().reset()
@@ -82,8 +108,9 @@ class Scheduler(NetworkComponent):
 class FIFOScheduler(Scheduler):
     """FIFO Scheduler."""
 
-    def __init__(self, bandwidth, packet_size, propagation_delay=0, buffer_size=None):
-        super().__init__(bandwidth, packet_size, propagation_delay=propagation_delay, buffer_size=buffer_size)
+    def __init__(self, bandwidth, packet_size, busy_period_window_size=0, propagation_delay=0, buffer_size=None):
+        super().__init__(bandwidth, packet_size, busy_period_window_size=busy_period_window_size,
+                         propagation_delay=propagation_delay, buffer_size=buffer_size)
         return
 
     def add_packet(self, time, packet_number, component_idx):
@@ -152,8 +179,10 @@ class MultiSlopeShaperSCED:
 class SCEDScheduler(Scheduler):
     """SCED scheduler."""
 
-    def __init__(self, bandwidth, packet_size, offset, *args, propagation_delay=0, buffer_size=None):
-        super().__init__(bandwidth, packet_size, propagation_delay=propagation_delay, buffer_size=buffer_size)
+    def __init__(self, bandwidth, packet_size, offset, *args, busy_period_window_size=0, propagation_delay=0,
+                 buffer_size=None):
+        super().__init__(bandwidth, packet_size, busy_period_window_size=busy_period_window_size,
+                         propagation_delay=propagation_delay, buffer_size=buffer_size)
         self.multi_slope_shapers = [MultiSlopeShaperSCED()] * self.num_flow
         for flow_idx, ms in args:
             assert isinstance(ms, MultiSlopeShaperSCED), "Every argument passed into SCEDScheduler " \

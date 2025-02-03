@@ -18,8 +18,8 @@ class NetworkSimulator:
                  shaping_mode="pfs", buffer_bound="infinite", arrival_pattern_type="sync", sync_jitter=0,
                  periodic_arrival_ratio=1.0, awake_prob_choice=(1.0,), awake_prob_sample_weight=(1.0,), awake_dur=0,
                  awake_dist="constant", sleep_dur="max", sleep_dist="constant", arrival_pattern=None,
-                 keep_per_hop_departure=True, repeat=False, scaling_factor=1.0, packet_size=1, propagation_delay=0,
-                 tor=0.003):
+                 keep_per_hop_departure=True, repeat=False, scaling_factor=1.0, packet_size=1,
+                 busy_period_window_size=0, propagation_delay=0, tor=0.003):
         flow_profile = np.array(flow_profile)
         flow_path = np.array(flow_path)
         reprofiling_delay = np.array(reprofiling_delay)
@@ -81,6 +81,7 @@ class NetworkSimulator:
         else:
             packet_size = [packet_size] * self.num_flow
         self.packet_size = np.array(packet_size)
+        self.busy_period_window_size = busy_period_window_size
         if isinstance(propagation_delay, Iterable):
             assert len(propagation_delay) == self.num_link, "Please set the packet propapation delay either as a " \
                                                             "single value, or as a list of values, one for each link."
@@ -152,6 +153,7 @@ class NetworkSimulator:
                         self.packet_size[link_flow_mask])) * (1 + tor)
             if scheduling_policy == "fifo":
                 self.schedulers.append(FIFOScheduler(link_bandwidth, self.packet_size,
+                                                     busy_period_window_size=self.busy_period_window_size,
                                                      propagation_delay=self.propagation_delay[link_idx],
                                                      buffer_size=link_buffer))
             elif scheduling_policy == "sced":
@@ -164,6 +166,7 @@ class NetworkSimulator:
                     SCEDScheduler(link_bandwidth, self.packet_size, remaining_delay,
                                   *[(flow_idx, get_reprofiler_sced(flow_idx)) for flow_idx in
                                     np.arange(self.num_flow)[link_flow_mask]],
+                                  busy_period_window_size=self.busy_period_window_size,
                                   propagation_delay=self.propagation_delay[link_idx], buffer_size=link_buffer))
         # Compute the expected latency bound (with small tolerance for numerical instability).
         # Compute packetization delay from schedulers.

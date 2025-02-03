@@ -12,8 +12,9 @@ class RLNetworkEnv:
                  shaping_mode="pfs", buffer_bound="infinite", arrival_pattern_type="sync", sync_jitter=0,
                  periodic_arrival_ratio=1.0, awake_prob_choice=(1.0,), awake_prob_sample_weight=(1.0,), awake_dur=0,
                  awake_dist="constant", sleep_dur="max", sleep_dist="constant", arrival_pattern=None,
-                 keep_per_hop_departure=True, repeat=False, scaling_factor=1.0, packet_size=1, propagation_delay=0,
-                 tor=0.003, pause_interval=1, high_reward=1, low_reward=0.1, penalty=-10):
+                 keep_per_hop_departure=True, repeat=False, scaling_factor=1.0, packet_size=1,
+                 busy_period_window_size=0, propagation_delay=0, tor=0.003, pause_interval=1, high_reward=1,
+                 low_reward=0.1, penalty=-10):
         self.simulator = NetworkSimulator(flow_profile, flow_path, reprofiling_delay, simulation_time=simulation_time,
                                           scheduling_policy=scheduling_policy, shaping_mode=shaping_mode,
                                           buffer_bound=buffer_bound, arrival_pattern_type=arrival_pattern_type,
@@ -24,6 +25,7 @@ class RLNetworkEnv:
                                           arrival_pattern=arrival_pattern,
                                           keep_per_hop_departure=keep_per_hop_departure, repeat=repeat,
                                           scaling_factor=scaling_factor, packet_size=packet_size,
+                                          busy_period_window_size=busy_period_window_size,
                                           propagation_delay=propagation_delay, tor=tor)
         self.repeat = repeat
         self.pause_interval = pause_interval
@@ -111,10 +113,12 @@ class RLNetworkEnv:
                             rb = self.simulator.reprofilers[(link_idx, flow_idx)].peek(self.time)
                             reprofiler_backlog[flow_idx][link_idx + 1] = rb * self.simulator.packet_size[flow_idx]
         scheduler_backlog = [[0] * self.simulator.num_link for _ in range(self.simulator.num_flow)]
+        scheduler_utilization = [[0] * self.simulator.num_link for _ in range(self.simulator.num_flow)]
         for flow_idx, flow_links in enumerate(self.simulator.flow_path):
             for link_idx in flow_links:
-                sb = self.simulator.schedulers[link_idx].peek(self.time)
+                sb, su = self.simulator.schedulers[link_idx].peek(self.time)
                 scheduler_backlog[flow_idx][link_idx] = sb
+                scheduler_utilization[flow_idx][link_idx] = su
         for flow_idx in range(self.simulator.num_flow):
             state = states[flow_idx]
             if self.simulator.scheduling_policy == "fifo":
@@ -122,7 +126,9 @@ class RLNetworkEnv:
                     rb = reprofiler_backlog[flow_idx]
                     state.extend(rb)
             sb = scheduler_backlog[flow_idx]
+            su = scheduler_utilization[flow_idx]
             state.extend(sb)
+            state.extend(su)
         # Compute the reward based on the end-to-end latency and determine whether the episode terminates.
         terminate, exceed_target = True, False
         reward = 0
@@ -155,17 +161,17 @@ class RLNetworkEnv:
         # Set the initial state.
         if self.simulator.scheduling_policy == "fifo":
             if self.simulator.shaping_mode in ["pfs", "ils", "ntb"]:
-                # Token num, ingress shaper backlog, per-hop shaper backlog, per-hop scheduler backlog
-                state_size = 2 * self.simulator.num_link + 2
+                # Token num, ingress shaper backlog, per-hop shaper backlog, per-hop scheduler backlog and utilization
+                state_size = 3 * self.simulator.num_link + 2
             elif self.simulator.shaping_mode == "is":
-                # Token num, ingress shaper backlog, per-hop scheduler backlog
-                state_size = self.simulator.num_link + 2
+                # Token num, ingress shaper backlog, per-hop scheduler backlog and utilization
+                state_size = 2 * self.simulator.num_link + 2
             elif self.simulator.shaping_mode == "itb":
-                # Token num, per-hop scheduler backlog
-                state_size = self.simulator.num_link + 1
+                # Token num, per-hop scheduler backlog and utilization
+                state_size = 2 * self.simulator.num_link + 1
         elif self.simulator.scheduling_policy == "sced":
-            # Token num, per-hop scheduler backlog
-            state_size = self.simulator.num_link + 1
+            # Token num, per-hop scheduler backlog and utilization
+            state_size = 2 * self.simulator.num_link + 1
         states = [[0] * state_size for _ in range(self.simulator.num_flow)]
         for state, f, p in zip(states, self.simulator.token_bucket_profile, self.simulator.packet_size):
             state[0] = f[1] * p

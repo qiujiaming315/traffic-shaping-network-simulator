@@ -71,8 +71,8 @@ if __name__ == '__main__':
                                awake_prob_sample_weight=tuple(args.awake_prob_sample_weight),
                                awake_dur=args.awake_dur, awake_dist=args.awake_dist, sleep_dur=args.sleep_dur,
                                sleep_dist=args.sleep_dist, arrival_pattern=None, keep_per_hop_departure=False,
-                               scaling_factor=1.0, packet_size=1, propagation_delay=0,
-                               pause_interval=args.pause_interval, high_reward=args.high_reward,
+                               scaling_factor=1.0, packet_size=1, busy_period_window_size=args.pause_interval,
+                               propagation_delay=0, pause_interval=args.pause_interval, high_reward=args.high_reward,
                                low_reward=args.low_reward, penalty=args.penalty)
     # Initialize the environment and get the initial state.
     initial_state = environment.reset()

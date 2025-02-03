@@ -68,7 +68,8 @@ if __name__ == '__main__':
                                  awake_prob_sample_weight=tuple(args.awake_prob_sample_weight),
                                  awake_dur=args.awake_dur, awake_dist=args.awake_dist, sleep_dur=args.sleep_dur,
                                  sleep_dist=args.sleep_dist, arrival_pattern=None, keep_per_hop_departure=False,
-                                 repeat=False, scaling_factor=1.0, packet_size=1, propagation_delay=0)
+                                 repeat=False, scaling_factor=1.0, packet_size=1, busy_period_window_size=0,
+                                 propagation_delay=0)
     # Start the simulation.
     start = time.time()
     simulator.simulate()
