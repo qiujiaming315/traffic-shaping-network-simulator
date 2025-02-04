@@ -13,8 +13,8 @@ class RLNetworkEnv:
                  periodic_arrival_ratio=1.0, awake_prob_choice=(1.0,), awake_prob_sample_weight=(1.0,), awake_dur=0,
                  awake_dist="constant", sleep_dur="max", sleep_dist="constant", arrival_pattern=None,
                  keep_per_hop_departure=True, repeat=False, scaling_factor=1.0, packet_size=1,
-                 busy_period_window_size=0, propagation_delay=0, tor=0.003, pause_interval=1, high_reward=1,
-                 low_reward=0.1, penalty=-10):
+                 busy_period_window_size=0, propagation_delay=0, tor=0.003, pause_interval=1, action_mode="add_token",
+                 max_token_add=10, high_reward=1, low_reward=0.1, penalty=-10):
         self.simulator = NetworkSimulator(flow_profile, flow_path, reprofiling_delay, simulation_time=simulation_time,
                                           scheduling_policy=scheduling_policy, shaping_mode=shaping_mode,
                                           buffer_bound=buffer_bound, arrival_pattern_type=arrival_pattern_type,
@@ -29,6 +29,10 @@ class RLNetworkEnv:
                                           propagation_delay=propagation_delay, tor=tor)
         self.repeat = repeat
         self.pause_interval = pause_interval
+        valid_mode = action_mode in ["add_token", "on_off"]
+        assert valid_mode, "Please choose a control action mode between 'add_token' and 'on_off'."
+        self.action_mode = action_mode
+        self.max_token_add = max_token_add
         self.high_reward = high_reward
         self.low_reward = low_reward
         self.penalty = penalty
@@ -65,21 +69,39 @@ class RLNetworkEnv:
                     heapq.heappush(self.simulator.event_pool, event)
             return
 
+        def add_token_to_reprofiler(reprofiler, token_num):
+            # Only add token to the first token bucket of the reprofiler.
+            reprofiler.add_token(0, token_num)
+            # Add a packet forward event if the first token bucket is non-empty.
+            first_tb = reprofiler.token_buckets[0]
+            if token_num > 0 and len(first_tb.backlog) > 0:
+                tb_packet_number = first_tb.backlog[0][1]
+                event = Event(self.time, EventType.FORWARD, reprofiler.flow_idx, tb_packet_number, first_tb)
+                heapq.heappush(self.simulator.event_pool, event)
+            return
+
+        # Check the control action type and select the control function.
+        if self.action_mode == "add_token":
+            assert np.issubdtype(action.dtype, np.integer)
+            action = np.minimum(action, self.max_token_add)
+            action_func = add_token_to_reprofiler
+        else:
+            assert action.dtype == np.bool_
+            action_func = activate_reprofiler
         # Enforce the reprofiling control actions.
         if self.simulator.scheduling_policy == "fifo":
             if self.simulator.shaping_mode in ["pfs", "ils", "is", "ntb"]:
                 for flow_idx, a in enumerate(action):
-                    activate_reprofiler(self.simulator.ingress_reprofilers[flow_idx], a)
+                    action_func(self.simulator.ingress_reprofilers[flow_idx], a)
                     if self.simulator.shaping_mode in ["pfs", "ntb"]:
                         flow_links = self.simulator.flow_path[flow_idx]
                         for link_idx in flow_links:
-                            activate_reprofiler(self.simulator.reprofilers[(link_idx, flow_idx)], a)
+                            action_func(self.simulator.reprofilers[(link_idx, flow_idx)], a)
                     elif self.simulator.shaping_mode == "ils":
                         flow_links = self.simulator.flow_path[flow_idx]
                         for cur_link, next_link in zip(flow_links[:-1], flow_links[1:]):
-                            activate_reprofiler(
-                                self.simulator.reprofilers[(cur_link, next_link)].multi_slope_shapers[flow_idx],
-                                a)
+                            action_func(self.simulator.reprofilers[(cur_link, next_link)].multi_slope_shapers[flow_idx],
+                                        a)
         self.time += self.pause_interval
         # Start the simulation.
         packet_count_old = copy.deepcopy(self.simulator.packet_count)

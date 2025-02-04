@@ -63,7 +63,9 @@ class TokenBucket(NetworkComponent):
             # Release the forwarded packet.
             _, forwarded_number = self.backlog.pop(0)
             if self.active:
-                self.token += self.rate * (time - self.depart) - 1
+                if not self.token > self.burst:
+                    self.token += self.rate * (time - self.depart)
+                self.token -= 1
                 self.depart = time
             forwarded_idx, next_component = self.component_idx, self.next
             if len(self.backlog) == 0:
@@ -82,7 +84,10 @@ class TokenBucket(NetworkComponent):
 
     def peek(self, time):
         # Update the token bucket state.
-        token = min(self.token + self.rate * (time - self.depart), self.burst) if self.idle else 0
+        token = 0
+        if self.idle:
+            token = self.token if self.token > self.burst else min(self.token + self.rate * (time - self.depart),
+                                                                   self.burst)
         return token, len(self.backlog)
 
     def activate(self, action, time):
@@ -92,6 +97,10 @@ class TokenBucket(NetworkComponent):
                 self.token = token
             self.depart = time
         self.active = action
+        return
+
+    def add_token(self, token_num):
+        self.token += token_num
         return
 
     def reset(self):
@@ -218,6 +227,11 @@ class MultiSlopeShaper(NetworkComponent):
         # Turn on or turn off all the token bucket shapers.
         for tb in self.token_buckets:
             tb.activate(action, time)
+        return
+
+    def add_token(self, tb_idx, token_num):
+        # Add token to the specified token bucket shaper.
+        self.token_buckets[tb_idx].add_token(token_num)
         return
 
     def reset(self):
