@@ -42,6 +42,11 @@ def getargs():
                       help="Periodic flow sleep time distribution. Choose between 'uniform' and 'constant'.")
     args.add_argument('--pause-interval', type=float, default=1,
                       help="The length of a time step (in second) for the reinforcement learning environment.")
+    args.add_argument('--action-mode', type=str, default="add_token",
+                      help="The control action mode. Choose between 'add_token' and 'on_off'.")
+    args.add_argument('--max-token-add', type=int, default=10,
+                      help="Maximum number of token to add to the traffic shapers. Only used when the action mode is "
+                           "'add_token'.")
     args.add_argument('--high-reward', type=float, default=1,
                       help="The highest possible reward received by a flow when its end-to-end delay is 0.")
     args.add_argument('--low-reward', type=float, default=0.1,
@@ -72,7 +77,8 @@ if __name__ == '__main__':
                                awake_dur=args.awake_dur, awake_dist=args.awake_dist, sleep_dur=args.sleep_dur,
                                sleep_dist=args.sleep_dist, arrival_pattern=None, keep_per_hop_departure=False,
                                scaling_factor=1.0, packet_size=1, busy_period_window_size=args.pause_interval,
-                               propagation_delay=0, pause_interval=args.pause_interval, high_reward=args.high_reward,
+                               propagation_delay=0, pause_interval=args.pause_interval, action_mode=args.action_mode,
+                               max_token_add=args.max_token_add, high_reward=args.high_reward,
                                low_reward=args.low_reward, penalty=args.penalty)
     # Initialize the environment and get the initial state.
     initial_state = environment.reset()
