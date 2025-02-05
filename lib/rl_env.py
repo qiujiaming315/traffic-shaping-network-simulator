@@ -25,7 +25,7 @@ class RLNetworkEnv:
                                           arrival_pattern=arrival_pattern,
                                           keep_per_hop_departure=keep_per_hop_departure, repeat=repeat,
                                           scaling_factor=scaling_factor, packet_size=packet_size,
-                                          busy_period_window_size=busy_period_window_size,
+                                          busy_period_window_size=busy_period_window_size, max_token_add=max_token_add,
                                           propagation_delay=propagation_delay, tor=tor)
         self.repeat = repeat
         self.pause_interval = pause_interval

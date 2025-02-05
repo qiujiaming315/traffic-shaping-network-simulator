@@ -28,9 +28,10 @@ class NetworkComponent:
 
 class TokenBucket(NetworkComponent):
 
-    def __init__(self, rate, burst, component_idx=0, internal=False):
+    def __init__(self, rate, burst, max_token_add=0, component_idx=0, internal=False):
         self.rate = rate
         self.burst = burst
+        self.max_token_add = max_token_add
         self.component_idx = component_idx
         self.internal = internal
         self.active = True
@@ -63,7 +64,7 @@ class TokenBucket(NetworkComponent):
             # Release the forwarded packet.
             _, forwarded_number = self.backlog.pop(0)
             if self.active:
-                if not self.token > self.burst:
+                if self.token <= self.burst:
                     self.token += self.rate * (time - self.depart)
                 self.token -= 1
                 self.depart = time
@@ -101,6 +102,8 @@ class TokenBucket(NetworkComponent):
 
     def add_token(self, token_num):
         self.token += token_num
+        # The token number should not exceed the sum of the burst size and the maximum number of tokens to add.
+        self.token = min(self.burst + self.max_token_add, self.token)
         return
 
     def reset(self):
