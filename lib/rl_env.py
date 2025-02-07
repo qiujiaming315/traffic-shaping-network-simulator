@@ -69,15 +69,16 @@ class RLNetworkEnv:
                     heapq.heappush(self.simulator.event_pool, event)
             return
 
-        def add_token_to_reprofiler(reprofiler, token_num):
-            # Only add token to the first token bucket of the reprofiler.
-            reprofiler.add_token(0, token_num)
-            # Add a packet forward event if the first token bucket is non-empty.
-            first_tb = reprofiler.token_buckets[0]
-            if token_num > 0 and len(first_tb.backlog) > 0:
-                tb_packet_number = first_tb.backlog[0][1]
-                event = Event(self.time, EventType.FORWARD, reprofiler.flow_idx, tb_packet_number, first_tb)
-                heapq.heappush(self.simulator.event_pool, event)
+        def add_token_to_reprofiler(reprofiler, token_nums):
+            # Add token to each token bucket of the reprofiler.
+            for tb_idx, token_num in enumerate(token_nums):
+                reprofiler.add_token(tb_idx, token_num)
+                # Add a packet forward event if the token bucket is non-empty.
+                tb = reprofiler.token_buckets[tb_idx]
+                if token_num > 0 and len(tb.backlog) > 0:
+                    tb_packet_number = tb.backlog[0][1]
+                    event = Event(self.time, EventType.FORWARD, reprofiler.flow_idx, tb_packet_number, tb)
+                    heapq.heappush(self.simulator.event_pool, event)
             return
 
         # Check the control action type and select the control function.
