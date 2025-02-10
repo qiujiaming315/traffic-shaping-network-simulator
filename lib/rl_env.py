@@ -14,7 +14,7 @@ class RLNetworkEnv:
                  awake_dist="constant", sleep_dur="max", sleep_dist="constant", arrival_pattern=None,
                  keep_per_hop_departure=True, repeat=False, scaling_factor=1.0, packet_size=1,
                  busy_period_window_size=0, propagation_delay=0, tor=0.003, pause_interval=1, action_mode="add_token",
-                 max_token_add=10, high_reward=1, low_reward=0.1, penalty=-10):
+                 max_token_add=10, high_reward=1, low_reward=0.1, penalty=-10, reward_function_type="linear"):
         self.simulator = NetworkSimulator(flow_profile, flow_path, reprofiling_delay, simulation_time=simulation_time,
                                           scheduling_policy=scheduling_policy, shaping_mode=shaping_mode,
                                           buffer_bound=buffer_bound, arrival_pattern_type=arrival_pattern_type,
@@ -36,6 +36,9 @@ class RLNetworkEnv:
         self.high_reward = high_reward
         self.low_reward = low_reward
         self.penalty = penalty
+        valid_type = reward_function_type in ["linear", "quadratic"]
+        assert valid_type, "Please choose a reward function type between 'linear' and 'quadratic'."
+        self.reward_function_type = reward_function_type
         self.time = 0
         self.num_agent = self.simulator.num_flow
         # Add a summary event at each time interval to collect a snapshot of the network.
@@ -52,7 +55,10 @@ class RLNetworkEnv:
         # Compute the reward given an end-to-end delay
         reward = 0
         if normalized_delay != -1 and normalized_delay <= 1:
-            reward = self.low_reward + (1 - normalized_delay) * (self.high_reward - self.low_reward)
+            if self.reward_function_type == "linear":
+                reward = self.low_reward + (1 - normalized_delay) * (self.high_reward - self.low_reward)
+            else:
+                reward = self.low_reward + ((1 - normalized_delay) ** 2) * (self.high_reward - self.low_reward)
         return reward
 
     def step(self, action):

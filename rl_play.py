@@ -53,6 +53,8 @@ def getargs():
                       help="The reward received by a flow when its end-to-end delay is equal to the worst case bound.")
     args.add_argument('--penalty', type=float, default=-10,
                       help="The negative penalty received by a flow when its end-to-end delay exceeds the bound.")
+    args.add_argument('--reward-function-type', type=str, default="linear",
+                      help="The shape of the reward function. Choose between 'linear' and 'quadratic'.")
     return args.parse_args()
 
 
@@ -79,7 +81,8 @@ if __name__ == '__main__':
                                scaling_factor=1.0, packet_size=1, busy_period_window_size=args.pause_interval,
                                propagation_delay=0, pause_interval=args.pause_interval, action_mode=args.action_mode,
                                max_token_add=args.max_token_add, high_reward=args.high_reward,
-                               low_reward=args.low_reward, penalty=args.penalty)
+                               low_reward=args.low_reward, penalty=args.penalty,
+                               reward_function_type=args.reward_function_type)
     # Initialize the environment and get the initial state.
     initial_state = environment.reset()
     # Keep iterating until the end of an episode.
