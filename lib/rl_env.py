@@ -10,7 +10,7 @@ class RLNetworkEnv:
 
     def __init__(self, flow_profile, flow_path, reprofiling_delay, simulation_time=1000, scheduling_policy="fifo",
                  shaping_mode="pfs", buffer_bound="infinite", arrival_pattern_type="sync", sync_jitter=0,
-                 periodic_arrival_ratio=1.0, awake_prob_choice=(1.0,), awake_prob_sample_weight=(1.0,), awake_dur=0,
+                 periodic_arrival_ratio=1.0, periodic_pattern_weight=(0.8, 0.1, 0.1), awake_dur=0,
                  awake_dist="constant", sleep_dur="max", sleep_dist="constant", arrival_pattern=None,
                  keep_per_hop_departure=True, repeat=False, scaling_factor=1.0, packet_size=1,
                  busy_period_window_size=0, propagation_delay=0, tor=0.003, pause_interval=1, action_mode="add_token",
@@ -19,8 +19,7 @@ class RLNetworkEnv:
                                           scheduling_policy=scheduling_policy, shaping_mode=shaping_mode,
                                           buffer_bound=buffer_bound, arrival_pattern_type=arrival_pattern_type,
                                           sync_jitter=sync_jitter, periodic_arrival_ratio=periodic_arrival_ratio,
-                                          awake_prob_choice=awake_prob_choice,
-                                          awake_prob_sample_weight=awake_prob_sample_weight, awake_dur=awake_dur,
+                                          periodic_pattern_weight=periodic_pattern_weight, awake_dur=awake_dur,
                                           awake_dist=awake_dist, sleep_dur=sleep_dur, sleep_dist=sleep_dist,
                                           arrival_pattern=arrival_pattern,
                                           keep_per_hop_departure=keep_per_hop_departure, repeat=repeat,
@@ -66,24 +65,26 @@ class RLNetworkEnv:
         end_to_end = []
 
         def activate_reprofiler(reprofiler, a):
-            reprofiler.activate(a, self.time)
+            reprofiler.activate(a)
             # Add a packet forward event if the shaper is turned off.
             if not a:
                 for tb in reprofiler.token_buckets:
-                    tb_packet_number = 0 if len(tb.backlog) == 0 else tb.backlog[0][1]
-                    event = Event(self.time, EventType.FORWARD, reprofiler.flow_idx, tb_packet_number, tb)
-                    heapq.heappush(self.simulator.event_pool, event)
+                    if not tb.idle and tb.head_pointer < len(tb.backlog):
+                        tb_packet_number = tb.backlog[tb.head_pointer][1]
+                        event = Event(self.time, EventType.FORWARD, reprofiler.flow_idx, tb_packet_number, tb,
+                                      flag=False)
+                        heapq.heappush(self.simulator.event_pool, event)
             return
 
         def add_token_to_reprofiler(reprofiler, token_nums):
             # Add token to each token bucket of the reprofiler.
             for tb_idx, token_num in enumerate(token_nums):
-                reprofiler.add_token(tb_idx, token_num)
+                reprofiler.add_token(self.time, tb_idx, token_num)
                 # Add a packet forward event if the token bucket is non-empty.
                 tb = reprofiler.token_buckets[tb_idx]
                 if token_num > 0 and len(tb.backlog) > 0:
                     tb_packet_number = tb.backlog[0][1]
-                    event = Event(self.time, EventType.FORWARD, reprofiler.flow_idx, tb_packet_number, tb)
+                    event = Event(self.time, EventType.FORWARD, reprofiler.flow_idx, tb_packet_number, tb, flag=True)
                     heapq.heappush(self.simulator.event_pool, event)
             return
 

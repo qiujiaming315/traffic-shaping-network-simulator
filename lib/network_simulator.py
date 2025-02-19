@@ -16,7 +16,7 @@ class NetworkSimulator:
 
     def __init__(self, flow_profile, flow_path, reprofiling_delay, simulation_time=1000, scheduling_policy="fifo",
                  shaping_mode="pfs", buffer_bound="infinite", arrival_pattern_type="sync", sync_jitter=0,
-                 periodic_arrival_ratio=1.0, awake_prob_choice=(1.0,), awake_prob_sample_weight=(1.0,), awake_dur=0,
+                 periodic_arrival_ratio=1.0, periodic_pattern_weight=(0.8, 0.1, 0.1), awake_dur=0,
                  awake_dist="constant", sleep_dur="max", sleep_dist="constant", arrival_pattern=None,
                  keep_per_hop_departure=True, repeat=False, scaling_factor=1.0, packet_size=1,
                  busy_period_window_size=0, max_token_add=0, propagation_delay=0, tor=0.003):
@@ -44,19 +44,13 @@ class NetworkSimulator:
         self.sync_jitter = sync_jitter
         assert 0 <= periodic_arrival_ratio <= 1, "Please choose a periodic arrival ratio within the range [0, 1]."
         self.periodic_arrival_ratio = periodic_arrival_ratio
-        assert isinstance(awake_prob_choice, Iterable) and isinstance(awake_prob_sample_weight, Iterable) and len(
-            awake_prob_choice) == len(awake_prob_sample_weight), "Please set the awake probability choices and " \
-                                                                 "sampling weights to be iterables of the same length."
-        self.awake_prob_choice = np.array(awake_prob_choice)
-        assert np.all(np.logical_and(self.awake_prob_choice >= 0, self.awake_prob_choice <= 1)), "Please ensure each " \
-                                                                                                 "choice of flow " \
-                                                                                                 "awake probability " \
-                                                                                                 "is within the " \
-                                                                                                 "range [0, 1]."
-        self.awake_prob_sample_weight = np.array(awake_prob_sample_weight)
-        assert np.all(self.awake_prob_sample_weight > 0), "Please set the flow awake sampling weights to positive " \
-                                                          "values."
-        self.awake_prob_sample_weight /= np.sum(self.awake_prob_sample_weight)
+        assert isinstance(periodic_pattern_weight, tuple) and len(periodic_pattern_weight) == 3, \
+            "Please set the flow periodic arrival pattern weights to be a tuple of 3 elements representing the " \
+            "weight of selecting 'awake', 'sleep', or 'keep awake' as the periodic pattern, respectively."
+        self.periodic_pattern_weight = np.array(periodic_pattern_weight)
+        assert np.all(self.periodic_pattern_weight > 0), "Please set the flow awake sampling weights to positive " \
+                                                         "values."
+        self.periodic_pattern_weight /= np.sum(self.periodic_pattern_weight)
         valid_awake = awake_dist in ["exponential", "constant"]
         assert valid_awake, "Please choose an awake duration distribution between 'exponential' and 'constant'."
         self.awake_dist = awake_dist
@@ -248,16 +242,22 @@ class NetworkSimulator:
             event = heapq.heappop(self.event_pool)
             if event.event_type == EventType.ARRIVAL:
                 # Start a busy period by creating a forward event if the component is idle upon arrival.
-                if event.component.arrive(event.time, event.packet_number, event.flow_idx, event.internal):
+                if event.component.arrive(event.time, event.packet_number, event.flow_idx, event.flag):
                     forward_event = Event(event.time, EventType.FORWARD, event.flow_idx, event.packet_number,
-                                          event.component)
+                                          event.component, flag=True)
+                    heapq.heappush(self.event_pool, forward_event)
+                # Add a non-conformant packet forward event if the token bucket is not active.
+                if isinstance(event.component, TokenBucket) and not event.component.active:
+                    forward_event = Event(event.time, EventType.FORWARD, event.flow_idx, event.packet_number,
+                                          event.component, flag=False)
                     heapq.heappush(self.event_pool, forward_event)
             elif event.event_type == EventType.FORWARD:
                 (next_depart, next_idx, next_number, idle, forwarded_idx, forwarded_number,
-                 next_component) = event.component.forward(event.time, event.packet_number, event.flow_idx)
+                 next_component) = event.component.forward(event.time, event.packet_number, event.flow_idx, event.flag)
                 # Submit the next forward event if the component is currently busy.
                 if not idle:
-                    forward_event = Event(next_depart, EventType.FORWARD, next_idx, next_number, event.component)
+                    forward_event = Event(next_depart, EventType.FORWARD, next_idx, next_number, event.component,
+                                          flag=event.flag)
                     heapq.heappush(self.event_pool, forward_event)
                 # Create a packet arrival event for the next component.
                 departed = next_component is not None
@@ -273,7 +273,7 @@ class NetworkSimulator:
                     interleaved_arrival = is_next_interleaved and not is_internal_ms
                     if not (is_terminal or ms_arrival):
                         arrival_event = Event(event.time + link_propagation_delay, EventType.ARRIVAL, forwarded_idx,
-                                              forwarded_number, next_component, internal=is_internal_ms)
+                                              forwarded_number, next_component, flag=is_internal_ms)
                         heapq.heappush(self.event_pool, arrival_event)
                     if ms_arrival or interleaved_arrival:
                         ms_component = next_component if ms_arrival else next_component.multi_slope_shapers[
@@ -300,16 +300,15 @@ class NetworkSimulator:
         # Track the maximum backlog size at each reprofiler.
         if self.scheduling_policy == "fifo":
             if self.shaping_mode in ["pfs", "ils", "is", "ntb"]:
-                for forwarded_idx in range(self.num_flow):
-                    self.ingress_reprofiler_max_backlog[forwarded_idx] = max(
-                        tb.max_backlog_size for tb in self.ingress_reprofilers[forwarded_idx].token_buckets) * \
-                                                                         self.packet_size[forwarded_idx]
+                for flow_idx in range(self.num_flow):
+                    self.ingress_reprofiler_max_backlog[flow_idx] = max(
+                        tb.max_backlog_size for tb in self.ingress_reprofilers[flow_idx].token_buckets) * \
+                                                                    self.packet_size[flow_idx]
             if self.shaping_mode in ["pfs", "ntb"]:
                 for idx, key in enumerate(self.reprofilers.keys()):
-                    forwarded_idx = key[1]
+                    flow_idx = key[1]
                     self.reprofiler_max_backlog[idx] = max(
-                        tb.max_backlog_size for tb in self.reprofilers[key].token_buckets) * self.packet_size[
-                                                           forwarded_idx]
+                        tb.max_backlog_size for tb in self.reprofilers[key].token_buckets) * self.packet_size[flow_idx]
             elif self.shaping_mode == "ils":
                 for idx, key in enumerate(self.reprofilers.keys()):
                     self.reprofiler_max_backlog[idx] = self.reprofilers[key].max_backlog_size
@@ -373,57 +372,73 @@ class NetworkSimulator:
                 sync_arrival.append(sync_time)
             sync_arrival.append(self.simulation_time)
             # Generate the corresponding (synchronized) arrival patterns.
-            time_idx, flow_traffic, flow_token, flow_sleep = 0, [], [], []
+            time_idx, flow_traffic, flow_token, flow_current_pattern = 0, [], [], []
+            flow_awake, flow_traffic_burst, flow_sleep = [], [], []
             for i in range(len(periodic_flow)):
                 flow_traffic.append(0)
                 flow_token.append(self.token_bucket_profile[periodic_flow[i], 1])
+                flow_current_pattern.append(0)
+                flow_awake.append(-1)
+                flow_traffic_burst.append(-1)
                 flow_sleep.append(0)
             while True:
-                awake_prob = np.random.choice(self.awake_prob_choice, 1, p=self.awake_prob_sample_weight)[0]
-                skip_awake = np.random.rand(len(periodic_flow)) >= awake_prob
                 for i in range(len(periodic_flow)):
                     flow_idx = periodic_flow[i]
                     flow_rate = self.token_bucket_profile[flow_idx, 0]
                     flow_burst = self.token_bucket_profile[flow_idx, 1]
                     period_end_idx = time_idx + 2 if time_idx + 2 < len(sync_arrival) else time_idx + 1
-                    # Let the flow sleep through the current period.
-                    if skip_awake[i]:
+                    current_pattern = flow_current_pattern[i]
+                    if current_pattern != 1:
+                        # If the current pattern is not sleep, the next pattern can be any one of the three.
+                        next_pattern = np.random.choice(3, 1, p=self.periodic_pattern_weight)[0]
+                    else:
+                        # Otherwise, the next pattern must be either awake or sleep.
+                        next_pattern = np.random.choice(2, 1, p=self.periodic_pattern_weight[:2] / np.sum(
+                            self.periodic_pattern_weight[:2]))[0]
+                    # Update the flow arrival pattern.
+                    flow_current_pattern[i] = next_pattern
+                    if current_pattern == 1:
+                        # Let the flow sleep through the current period.
                         flow_sleep[i] += sync_arrival[period_end_idx] - sync_arrival[time_idx]
                     else:
-                        # Skip if the next burst starts after the simulation finishes.
                         flow_jitter = np.random.rand() * self.sync_jitter
-                        if sync_arrival[time_idx] + flow_jitter >= self.simulation_time:
-                            continue
-                        # Update arrival pattern after a sleep period.
-                        flow_token[i] += (flow_sleep[i] + flow_jitter) * flow_rate
-                        flow_token[i] = min(flow_token[i], flow_burst)
-                        update_pattern(arrival_pattern[flow_idx], sync_arrival[time_idx] + flow_jitter,
-                                       flow_traffic[i], 0)
-                        # Update arrival pattern after an awake period (including an initial burst).
-                        # Round the cumulative traffic (to ensure packetized arrival).
-                        traffic_burst = flow_traffic[i] + flow_token[i]
-                        awake_dur = sync_arrival[time_idx + 1] - sync_arrival[time_idx]
-                        traffic_new = round(traffic_burst + awake_dur * flow_rate)
-                        awake_dur = max((traffic_new - traffic_burst) / flow_rate, 0)
-                        period_duration = sync_arrival[period_end_idx] - sync_arrival[time_idx] - flow_jitter
-                        if awake_dur > period_duration:
-                            # If the awake duration is too large, round down the cumulative traffic instead.
-                            traffic_new -= 1
-                            awake_dur = max((traffic_new - traffic_burst) / flow_rate, 0)
-                        if traffic_new > traffic_burst:
+                        if current_pattern == 0:
+                            # Skip if the next burst starts after the simulation finishes.
+                            if sync_arrival[time_idx] + flow_jitter >= self.simulation_time:
+                                continue
+                            # Update arrival pattern after a sleep period.
+                            flow_token[i] += (flow_sleep[i] + flow_jitter) * flow_rate
+                            flow_token[i] = min(flow_token[i], flow_burst)
                             update_pattern(arrival_pattern[flow_idx], sync_arrival[time_idx] + flow_jitter,
-                                           traffic_burst, 0)
-                            flow_token[i] = 0
-                        else:
-                            flow_token[i] -= traffic_new - flow_traffic[i]
-                        flow_traffic[i] = traffic_new
-                        update_pattern(arrival_pattern[flow_idx], sync_arrival[time_idx] + awake_dur + flow_jitter,
-                                       traffic_new, flow_rate)
-                        if time_idx + 2 >= len(sync_arrival):
-                            continue
-                        # Keep track of the flow sleep duration.
-                        sleep_dur = period_duration - awake_dur
-                        flow_sleep[i] = sleep_dur
+                                           flow_traffic[i], 0)
+                            # Keep track of the flow bursting event.
+                            flow_awake[i] = sync_arrival[time_idx] + flow_jitter
+                            flow_traffic_burst[i] = flow_traffic[i] + flow_token[i]
+                        if next_pattern != 2 or time_idx + 2 >= len(sync_arrival) - 1:
+                            # Update arrival pattern after an awake period (including an initial burst).
+                            # Round the cumulative traffic (to ensure packetized arrival).
+                            awake_dur = sync_arrival[time_idx + 1] + flow_jitter - flow_awake[i]
+                            traffic_new = round(flow_traffic_burst[i] + awake_dur * flow_rate)
+                            awake_dur = max((traffic_new - flow_traffic_burst[i]) / flow_rate, 0)
+                            period_duration = sync_arrival[period_end_idx] - flow_awake[i]
+                            if awake_dur > period_duration:
+                                # If the awake duration is too large, round down the cumulative traffic instead.
+                                traffic_new -= 1
+                                awake_dur = max((traffic_new - flow_traffic_burst[i]) / flow_rate, 0)
+                            if traffic_new > flow_traffic_burst[i]:
+                                update_pattern(arrival_pattern[flow_idx], flow_awake[i],
+                                               flow_traffic_burst[i], 0)
+                                flow_token[i] = 0
+                            else:
+                                flow_token[i] -= traffic_new - flow_traffic[i]
+                            flow_traffic[i] = traffic_new
+                            update_pattern(arrival_pattern[flow_idx], flow_awake[i] + awake_dur,
+                                           traffic_new, flow_rate)
+                            if time_idx + 2 >= len(sync_arrival):
+                                continue
+                            # Keep track of the flow sleep duration.
+                            sleep_dur = period_duration - awake_dur
+                            flow_sleep[i] = sleep_dur
                 time_idx += 2
                 if time_idx >= len(sync_arrival) - 1:
                     break
@@ -432,11 +447,16 @@ class NetworkSimulator:
             for flow_idx in periodic_flow:
                 flow_rate = self.token_bucket_profile[flow_idx, 0]
                 flow_token = self.token_bucket_profile[flow_idx, 1]
-                time, traffic, token, sleep_overtime = 0, 0, flow_token, 0
+                time, traffic, token, sleep_overtime, awake_overtime = 0, 0, flow_token, 0, 0
+                current_pattern, traffic_burst = 0, -1
                 while True:
-                    # Randomly skip this awake period.
-                    awake_prob = np.random.choice(self.awake_prob_choice, 1, p=self.awake_prob_sample_weight)[0]
-                    skip_awake = np.random.rand() >= awake_prob
+                    if current_pattern != 1:
+                        # If the current pattern is not sleep, the next pattern can be any one of the three.
+                        next_pattern = np.random.choice(3, 1, p=self.periodic_pattern_weight)[0]
+                    else:
+                        # Otherwise, the next pattern must be either awake or sleep.
+                        next_pattern = np.random.choice(2, 1, p=self.periodic_pattern_weight[:2] / np.sum(
+                            self.periodic_pattern_weight[:2]))[0]
                     # Compute the sleep and awake time for this period.
                     if self.sleep_dur in ["min", "max"]:
                         sleep_dur = (flow_token / flow_rate)
@@ -448,31 +468,39 @@ class NetworkSimulator:
                         awake_dur = np.random.exponential(self.awake_dur)
                     else:
                         awake_dur = self.awake_dur
-                    if skip_awake:
+                    if current_pattern == 1:
                         # Let the flow sleep through the current period.
                         sleep_overtime += sleep_dur + awake_dur
                     else:
-                        # Update arrival pattern after a sleep period.
-                        time += sleep_dur + sleep_overtime
-                        sleep_overtime = 0
-                        token += sleep_dur * flow_rate
-                        token = min(token, flow_token)
-                        if update_pattern(arrival_pattern[flow_idx], time, traffic, 0):
-                            break
-                        # Update arrival pattern after an awake period (including an initial burst).
-                        traffic_burst = traffic + token
-                        # Round the cumulative traffic (to ensure packetized arrival).
-                        traffic_new = round(traffic_burst + awake_dur * flow_rate)
-                        if traffic_new > traffic_burst:
-                            update_pattern(arrival_pattern[flow_idx], time, traffic_burst, 0)
-                            awake_dur = (traffic_new - traffic_burst) / flow_rate
-                            time += awake_dur
-                            token = 0
+                        if current_pattern == 0:
+                            # Update arrival pattern after a sleep period.
+                            time += sleep_dur + sleep_overtime
+                            token += (sleep_dur + sleep_overtime) * flow_rate
+                            token = min(token, flow_token)
+                            sleep_overtime = 0
+                            if update_pattern(arrival_pattern[flow_idx], time, traffic, 0):
+                                break
+                            traffic_burst = traffic + token
                         else:
-                            token -= traffic_new - traffic
-                        traffic = traffic_new
-                        if update_pattern(arrival_pattern[flow_idx], time, traffic, flow_rate):
-                            break
+                            awake_overtime += sleep_dur
+                        if next_pattern != 2:
+                            # Update arrival pattern after an awake period (including an initial burst).
+                            # Round the cumulative traffic (to ensure packetized arrival).
+                            traffic_new = round(traffic_burst + (awake_dur + awake_overtime) * flow_rate)
+                            awake_overtime = 0
+                            if traffic_new > traffic_burst:
+                                update_pattern(arrival_pattern[flow_idx], time, traffic_burst, 0)
+                                awake_dur = (traffic_new - traffic_burst) / flow_rate
+                                time += awake_dur
+                                token = 0
+                            else:
+                                token -= traffic_new - traffic
+                            traffic = traffic_new
+                            if update_pattern(arrival_pattern[flow_idx], time, traffic, flow_rate):
+                                break
+                        else:
+                            awake_overtime += awake_dur
+                    current_pattern = next_pattern
         return arrival_pattern
 
     def reset(self, arrival_pattern=None):
@@ -541,8 +569,8 @@ class Event:
     flow_idx: int = 0
     packet_number: int = 0
     component: NetworkComponent = NetworkComponent()
-    internal: bool = False
+    flag: bool = False
 
     def __lt__(self, other):
-        return (self.time, self.event_type.value, self.internal, self.packet_number) < (
-            other.time, other.event_type.value, other.internal, other.packet_number)
+        return (self.time, self.event_type.value, self.flag, self.packet_number) < (
+            other.time, other.event_type.value, other.flag, other.packet_number)

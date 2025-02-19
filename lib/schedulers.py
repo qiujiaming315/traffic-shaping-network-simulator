@@ -40,7 +40,7 @@ class Scheduler(NetworkComponent):
         # Function to add packets to the scheduler buffer.
         return
 
-    def forward(self, time, packet_number, component_idx):
+    def forward(self, time, packet_number, component_idx, is_conformant):
         # Check if the packet to forward has the right flow index and packet sequence number.
         if (len(self.backlog) == 0 and self.next_packet is None) or (self.next_packet is not None and (
                 self.next_packet.flow_idx != component_idx or self.next_packet.packet_number != packet_number)):

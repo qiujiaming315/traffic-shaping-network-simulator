@@ -13,7 +13,7 @@ class NetworkComponent:
         """Method to add an arriving packet to backlog."""
         return
 
-    def forward(self, time, packet_number, component_idx):
+    def forward(self, time, packet_number, component_idx, is_conformant):
         """Method to release a packet from the backlog."""
         return
 
@@ -37,6 +37,7 @@ class TokenBucket(NetworkComponent):
         self.active = True
         self.backlog = []
         self.max_backlog_size = 0
+        self.head_pointer = 0
         self.token = burst
         self.depart = 0
         super().__init__()
@@ -44,44 +45,64 @@ class TokenBucket(NetworkComponent):
 
     def arrive(self, time, packet_number, component_idx, is_internal):
         self.backlog.append((time, packet_number))
-        self.max_backlog_size = max(self.max_backlog_size, len(self.backlog))
+        self.max_backlog_size = max(self.max_backlog_size, len(self.backlog) - self.head_pointer)
         return self.idle
 
-    def forward(self, time, packet_number, component_idx):
-        # Check if the packet to forward has the right sequence number.
-        if len(self.backlog) == 0 or self.backlog[0][1] != packet_number:
-            # Redundant forward event. Ignore.
-            return time, 0, 0, True, 0, 0, None
-        forwarded_number, forwarded_idx, next_component = 0, 0, None
-        if self.idle:
-            # Initiate a busy period.
-            if self.active:
+    def forward(self, time, packet_number, component_idx, is_conformant):
+        if is_conformant:
+            # When the packet forwarding is conformant with the token bucket profile.
+            # Check if the packet to forward has the right sequence number.
+            if len(self.backlog) == 0 or self.backlog[0][1] != packet_number:
+                # Redundant forward event. Ignore.
+                return time, 0, 0, True, 0, 0, None
+            # Release the forwarded packet.
+            forwarded_number, forwarded_idx, next_component = 0, 0, None
+            if self.idle:
+                # Initiate a busy period.
                 token, _ = self.peek(time)
                 self.token = token
                 self.depart = time
-            self.idle = False
-        else:
-            # Release the forwarded packet.
-            _, forwarded_number = self.backlog.pop(0)
-            if self.active:
+                self.idle = False
+            else:
+                # Release the forwarded packet.
+                _, forwarded_number = self.backlog.pop(0)
+                # A packet arrives at the next component if the actual head packet is released.
+                if self.head_pointer == 0:
+                    forwarded_idx, next_component = self.component_idx, self.next
+                # Update the head packet pointer.
+                self.head_pointer = max(self.head_pointer - 1, 0)
                 if self.token <= self.burst:
                     self.token += self.rate * (time - self.depart)
                 self.token -= 1
                 self.depart = time
-            forwarded_idx, next_component = self.component_idx, self.next
-            if len(self.backlog) == 0:
-                # Terminate a busy period.
-                self.idle = True
-                return time, 0, 0, self.idle, forwarded_idx, forwarded_number, next_component
-        # Examine the next packet.
-        next_arrival, next_number = self.backlog[0]
-        next_depart = time
-        if self.active:
+                if len(self.backlog) == 0:
+                    # Terminate a busy period.
+                    self.idle = True
+                    return time, 0, 0, self.idle, forwarded_idx, forwarded_number, next_component
+            # Examine the next packet.
+            next_arrival, next_number = self.backlog[0]
             delay = 0
             if self.token < 1:
                 delay = (1 - self.token) / self.rate
-            next_depart = max(next_arrival, self.depart) + delay
-        return next_depart, 0, next_number, self.idle, forwarded_idx, forwarded_number, next_component
+            next_depart = self.depart + delay
+            return next_depart, 0, next_number, self.idle, forwarded_idx, forwarded_number, next_component
+        else:
+            # Release packets regardless of the token bucket state, only happens when the token bucket is not active.
+            # Check if the packet to forward has the right sequence number.
+            if self.active or len(self.backlog) - self.head_pointer == 0 or self.backlog[self.head_pointer][
+                1] != packet_number:
+                # Redundant forward event. Ignore.
+                return time, 0, 0, True, 0, 0, None
+            _, forwarded_number = self.backlog[self.head_pointer]
+            forwarded_idx, next_component = self.component_idx, self.next
+            # Update the head packet pointer.
+            self.head_pointer += 1
+            if self.head_pointer == len(self.backlog):
+                # All backlogged packets have been released, stop forwarding packets.
+                return time, 0, 0, True, forwarded_idx, forwarded_number, next_component
+            # Forward the next backlogged packet.
+            _, next_number = self.backlog[self.head_pointer]
+            return time, 0, next_number, False, forwarded_idx, forwarded_number, next_component
 
     def peek(self, time):
         # Update the token bucket state.
@@ -89,18 +110,16 @@ class TokenBucket(NetworkComponent):
         if self.idle:
             token = self.token if self.token > self.burst else min(self.token + self.rate * (time - self.depart),
                                                                    self.burst)
-        return token, len(self.backlog)
+        return token, len(self.backlog) - self.head_pointer
 
-    def activate(self, action, time):
-        if action != self.active:
-            if self.active:
-                token, _ = self.peek(time)
-                self.token = token
-            self.depart = time
+    def activate(self, action):
         self.active = action
         return
 
-    def add_token(self, token_num):
+    def add_token(self, time, token_num):
+        token, _ = self.peek(time)
+        self.token = token
+        self.depart = time
         self.token += token_num
         # The token number should not exceed the sum of the burst size and the maximum number of tokens to add.
         self.token = min(self.burst + self.max_token_add, self.token)
@@ -110,6 +129,7 @@ class TokenBucket(NetworkComponent):
         self.active = True
         self.backlog = []
         self.max_backlog_size = 0
+        self.head_pointer = 0
         self.token = self.burst
         self.depart = 0
         super().reset()
@@ -210,7 +230,7 @@ class MultiSlopeShaper(NetworkComponent):
         self.eligible_packets[component_idx].append((time, packet_number))
         return all(len(ep) > 0 for ep in self.eligible_packets)
 
-    def forward(self, time, packet_number, component_idx):
+    def forward(self, time, packet_number, component_idx, is_conformant):
         # Release an eligible packet.
         forwarded_number = 0
         for ep in self.eligible_packets:
@@ -226,15 +246,15 @@ class MultiSlopeShaper(NetworkComponent):
                 max_backlog = backlog
         return max_backlog
 
-    def activate(self, action, time):
+    def activate(self, action):
         # Turn on or turn off all the token bucket shapers.
         for tb in self.token_buckets:
-            tb.activate(action, time)
+            tb.activate(action)
         return
 
-    def add_token(self, tb_idx, token_num):
+    def add_token(self, time, tb_idx, token_num):
         # Add token to the specified token bucket shaper.
-        self.token_buckets[tb_idx].add_token(token_num)
+        self.token_buckets[tb_idx].add_token(time, token_num)
         return
 
     def reset(self):
@@ -276,7 +296,7 @@ class InterleavedShaper(NetworkComponent):
             # Forward the first packet if eligible.
             return packet_idx == 0
 
-    def forward(self, time, packet_number, component_idx):
+    def forward(self, time, packet_number, component_idx, is_conformant):
         # Check if the packet to forward has the right flow index and packet sequence number.
         if len(self.backlog) == 0 or (self.backlog[0][0] != component_idx or self.backlog[0][1] != packet_number):
             # Redundant forward event. Ignore.
