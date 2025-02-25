@@ -106,10 +106,8 @@ class TokenBucket(NetworkComponent):
 
     def peek(self, time):
         # Update the token bucket state.
-        token = 0
-        if self.idle:
-            token = self.token if self.token > self.burst else min(self.token + self.rate * (time - self.depart),
-                                                                   self.burst)
+        token = self.token if self.token > self.burst else min(self.token + self.rate * (time - self.depart),
+                                                               self.burst)
         return token, len(self.backlog) - self.head_pointer
 
     def activate(self, action):
