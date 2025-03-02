@@ -52,12 +52,13 @@ class RLNetworkEnv:
 
     def reward_function(self, normalized_delay):
         # Compute the reward given an end-to-end delay
-        reward = 0
         if normalized_delay != -1 and normalized_delay <= 1:
             if self.reward_function_type == "linear":
                 reward = self.low_reward + (1 - normalized_delay) * (self.high_reward - self.low_reward)
             else:
                 reward = self.low_reward + ((1 - normalized_delay) ** 2) * (self.high_reward - self.low_reward)
+        else:
+            reward = self.penalty
         return reward
 
     def step(self, action):
@@ -170,10 +171,10 @@ class RLNetworkEnv:
                     exceed_target = True
             if len(self.simulator.event_pool) > 0:
                 terminate = False
-            flow_reward = 0 if len(end) == 0 else flow_reward / len(end)
+            # flow_reward = 0 if len(end) == 0 else flow_reward / len(end)
             reward += flow_reward
-        if exceed_target:
-            reward = self.penalty
+        # if exceed_target:
+        #     reward = self.penalty
         return states, reward, terminate, exceed_target, end_to_end
 
     def reset(self, arrival_pattern=None):
