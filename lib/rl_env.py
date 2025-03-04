@@ -56,7 +56,7 @@ class RLNetworkEnv:
             if self.reward_function_type == "linear":
                 reward = self.low_reward + (1 - normalized_delay) * (self.high_reward - self.low_reward)
             else:
-                reward = self.low_reward + ((1 - normalized_delay) ** 2) * (self.high_reward - self.low_reward)
+                reward = self.low_reward + (1 - normalized_delay ** 2) * (self.high_reward - self.low_reward)
         else:
             reward = self.penalty
         return reward
