@@ -24,7 +24,7 @@ class RLNetworkEnv:
                                           arrival_pattern=arrival_pattern,
                                           keep_per_hop_departure=keep_per_hop_departure, repeat=repeat,
                                           scaling_factor=scaling_factor, packet_size=packet_size,
-                                          busy_period_window_size=busy_period_window_size, max_token_add=max_token_add,
+                                          busy_period_window_size=busy_period_window_size,
                                           propagation_delay=propagation_delay, tor=tor)
         self.repeat = repeat
         self.pause_interval = pause_interval
@@ -80,10 +80,13 @@ class RLNetworkEnv:
         def add_token_to_reprofiler(reprofiler, token_nums):
             # Add token to each token bucket of the reprofiler.
             for tb_idx, token_num in enumerate(token_nums):
+                # Remove unused extra token from the previous time step.
+                reprofiler.reset_token(self.time, tb_idx)
+                # Add extra token for this time step.
                 reprofiler.add_token(self.time, tb_idx, token_num)
-                # Add a packet forward event if the token bucket is non-empty.
+                # Add a packet forward event if the token bucket has at least one token.
                 tb = reprofiler.token_buckets[tb_idx]
-                if token_num > 0 and len(tb.backlog) > 0:
+                if tb.token >= 1 and len(tb.backlog) > 0:
                     tb_packet_number = tb.backlog[0][1]
                     event = Event(self.time, EventType.FORWARD, reprofiler.flow_idx, tb_packet_number, tb, flag=True)
                     heapq.heappush(self.simulator.event_pool, event)
@@ -91,7 +94,7 @@ class RLNetworkEnv:
 
         # Check the control action type and select the control function.
         if self.action_mode == "add_token":
-            assert np.issubdtype(action.dtype, np.integer)
+            assert np.issubdtype(action.dtype, np.number)
             action = np.minimum(action, self.max_token_add)
             action_func = add_token_to_reprofiler
         else:

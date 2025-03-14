@@ -28,17 +28,18 @@ class NetworkComponent:
 
 class TokenBucket(NetworkComponent):
 
-    def __init__(self, rate, burst, max_token_add=0, component_idx=0, internal=False):
+    def __init__(self, rate, burst, component_idx=0, internal=False):
         self.rate = rate
         self.burst = burst
-        self.max_token_add = max_token_add
         self.component_idx = component_idx
         self.internal = internal
+        self.buffer_size = burst
         self.active = True
         self.backlog = []
         self.max_backlog_size = 0
         self.head_pointer = 0
         self.token = burst
+        self.extra_token = 0
         self.depart = 0
         super().__init__()
         return
@@ -71,10 +72,16 @@ class TokenBucket(NetworkComponent):
                     forwarded_idx, next_component = self.component_idx, self.next
                 # Update the head packet pointer.
                 self.head_pointer = max(self.head_pointer - 1, 0)
-                if self.token <= self.burst:
-                    self.token += self.rate * (time - self.depart)
+                # The token number increment should not be bounded by the buffer size during a busy period.
+                # This ensure packets can be forwarded even when the buffer size is smaller than 1.
+                self.token += self.rate * (time - self.depart)
+                # Packet departure consumes a token.
                 self.token -= 1
                 self.depart = time
+                # Update the tracker if extra token is used to forward the packet.
+                if self.token < self.extra_token:
+                    self.extra_token = self.token
+                    self.buffer_size = self.burst + self.extra_token
                 if len(self.backlog) == 0:
                     # Terminate a busy period.
                     self.idle = True
@@ -106,8 +113,7 @@ class TokenBucket(NetworkComponent):
 
     def peek(self, time):
         # Update the token bucket state.
-        token = self.token if self.token > self.burst else min(self.token + self.rate * (time - self.depart),
-                                                               self.burst)
+        token = min(self.token + self.rate * (time - self.depart), self.buffer_size)
         return token, len(self.backlog) - self.head_pointer
 
     def activate(self, action):
@@ -119,16 +125,31 @@ class TokenBucket(NetworkComponent):
         self.token = token
         self.depart = time
         self.token += token_num
-        # The token number should not exceed the sum of the burst size and the maximum number of tokens to add.
-        self.token = min(self.burst + self.max_token_add, self.token)
+        # Update the extra token tracker and the buffer size as well.
+        self.extra_token += token_num
+        self.buffer_size = self.burst + self.extra_token
+        return
+
+    def reset_token(self, time):
+        token, _ = self.peek(time)
+        self.token = token
+        self.depart = time
+        # Remove the unused extra token from the token bucket.
+        self.token -= self.extra_token
+        self.extra_token = 0
+        self.buffer_size = self.burst
+        # Ensure the token number does not exceed the buffer size.
+        assert self.token <= self.burst
         return
 
     def reset(self):
+        self.buffer_size = self.burst
         self.active = True
         self.backlog = []
         self.max_backlog_size = 0
         self.head_pointer = 0
         self.token = self.burst
+        self.extra_token = 0
         self.depart = 0
         super().reset()
         return
@@ -253,6 +274,11 @@ class MultiSlopeShaper(NetworkComponent):
     def add_token(self, time, tb_idx, token_num):
         # Add token to the specified token bucket shaper.
         self.token_buckets[tb_idx].add_token(time, token_num)
+        return
+
+    def reset_token(self, time, tb_idx):
+        # Remove unused extra token.
+        self.token_buckets[tb_idx].reset_token(time)
         return
 
     def reset(self):

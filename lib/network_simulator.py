@@ -19,7 +19,7 @@ class NetworkSimulator:
                  periodic_arrival_ratio=1.0, periodic_pattern_weight=(0.8, 0.1, 0.1), awake_dur=0,
                  awake_dist="constant", sleep_dur="max", sleep_dist="constant", arrival_pattern=None,
                  keep_per_hop_departure=True, repeat=False, scaling_factor=1.0, packet_size=1,
-                 busy_period_window_size=0, max_token_add=0, propagation_delay=0, tor=0.003):
+                 busy_period_window_size=0, propagation_delay=0, tor=0.003):
         flow_profile = np.array(flow_profile)
         flow_path = np.array(flow_path)
         reprofiling_delay = np.array(reprofiling_delay)
@@ -76,7 +76,6 @@ class NetworkSimulator:
             packet_size = [packet_size] * self.num_flow
         self.packet_size = np.array(packet_size)
         self.busy_period_window_size = busy_period_window_size
-        self.max_token_add = max_token_add
         if isinstance(propagation_delay, Iterable):
             assert len(propagation_delay) == self.num_link, "Please set the packet propapation delay either as a " \
                                                             "single value, or as a list of values, one for each link."
@@ -97,14 +96,11 @@ class NetworkSimulator:
         def get_reprofiler(flow_idx):
             if self.shaping_mode == "ntb":
                 return MultiSlopeShaper(flow_idx, TokenBucket(self.token_bucket_profile[flow_idx, 0],
-                                                              self.token_bucket_profile[flow_idx, 1],
-                                                              self.max_token_add))
+                                                              self.token_bucket_profile[flow_idx, 1]))
             else:
                 return MultiSlopeShaper(flow_idx, TokenBucket(self.token_bucket_profile[flow_idx, 0],
-                                                              token_bucket_reprofiling_burst[flow_idx],
-                                                              self.max_token_add),
-                                        TokenBucket(token_bucket_reprofiling_rate[flow_idx], 1,
-                                                    self.max_token_add))
+                                                              token_bucket_reprofiling_burst[flow_idx]),
+                                        TokenBucket(token_bucket_reprofiling_rate[flow_idx], 1))
 
         # Retrieve the path of each flow.
         self.flow_path = []
