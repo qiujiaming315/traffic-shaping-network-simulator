@@ -39,7 +39,6 @@ class TokenBucket(NetworkComponent):
         self.max_backlog_size = 0
         self.head_pointer = 0
         self.token = burst
-        self.extra_token = 0
         self.depart = 0
         super().__init__()
         return
@@ -73,15 +72,11 @@ class TokenBucket(NetworkComponent):
                 # Update the head packet pointer.
                 self.head_pointer = max(self.head_pointer - 1, 0)
                 # The token number increment should not be bounded by the buffer size during a busy period.
-                # This ensure packets can be forwarded even when the buffer size is smaller than 1.
+                # This ensures packets can be forwarded even when the buffer size is smaller than 1.
                 self.token += self.rate * (time - self.depart)
                 # Packet departure consumes a token.
                 self.token -= 1
                 self.depart = time
-                # Update the tracker if extra token is used to forward the packet.
-                if self.token < self.extra_token:
-                    self.extra_token = self.token
-                    self.buffer_size = self.burst + self.extra_token
                 if len(self.backlog) == 0:
                     # Terminate a busy period.
                     self.idle = True
@@ -120,6 +115,42 @@ class TokenBucket(NetworkComponent):
         self.active = action
         return
 
+    def reset(self):
+        self.buffer_size = self.burst
+        self.active = True
+        self.backlog = []
+        self.max_backlog_size = 0
+        self.head_pointer = 0
+        self.token = self.burst
+        self.depart = 0
+        super().reset()
+        return
+
+
+class ExtraTokenBucket(TokenBucket):
+
+    def __init__(self, rate, burst, component_idx=0, internal=False):
+        super().__init__(rate, burst, component_idx=component_idx, internal=internal)
+        self.extra_token = 0
+        return
+
+    def forward(self, time, packet_number, component_idx, is_conformant):
+        next_depart, next_idx, next_number, idle, forwarded_idx, forwarded_number, next_component = super().forward(
+            time, packet_number, component_idx, is_conformant)
+        # Update the tracker if extra token is used to forward the packet.
+        if self.token < self.extra_token:
+            self.extra_token = self.token
+            self.buffer_size = self.burst + self.extra_token
+        return next_depart, next_idx, next_number, idle, forwarded_idx, forwarded_number, next_component
+
+    def reset(self):
+        super().reset()
+        self.extra_token = 0
+        return
+
+
+class PassiveExtraTokenBucket(ExtraTokenBucket):
+
     def add_token(self, time, token_num):
         token, _ = self.peek(time)
         self.token = token
@@ -139,19 +170,85 @@ class TokenBucket(NetworkComponent):
         self.extra_token = 0
         self.buffer_size = self.burst
         # Ensure the token number does not exceed the buffer size.
-        assert self.token <= self.burst
+        self.token = min(self.token, self.burst)
+        return
+
+
+class ProactiveExtraTokenBucket(PassiveExtraTokenBucket):
+
+    def __init__(self, rate, burst, average_wait_time, packet_size, latency_target, transmission_delay, propagation_delay,
+                 component_idx=0, internal=False):
+        super().__init__(rate, burst, component_idx=component_idx, internal=internal)
+        assert average_wait_time > 0
+        self.average_wait_time = average_wait_time
+        self.packet_size = packet_size
+        self.latency_target = latency_target
+        assert isinstance(transmission_delay, np.ndarray)
+        self.transmission_delay = transmission_delay
+        self.num_link = len(transmission_delay)
+        assert isinstance(propagation_delay, np.ndarray) and np.size(propagation_delay) == self.num_link
+        self.propagation_delay = propagation_delay
+        self.remaining_burst = 0
+        self.scheduler_backlog = np.zeros_like(transmission_delay)
+        self.extra_waiting = False
+        self.extra_eligible = False
+        self.wait_time = 0
+        return
+
+    def arrive(self, time, packet_number, component_idx, is_internal):
+        super().arrive(time, packet_number, component_idx, is_internal)
+        if self.evaluate_feasibility(time) and not self.extra_waiting:
+            self.extra_waiting = True
+            self.extra_eligible = True
+            self.wait_time = np.random.exponential(self.average_wait_time)
+        else:
+            self.extra_eligible = False
+        return self.idle
+
+    def evaluate_feasibility(self, time):
+        if len(self.backlog) == 0:
+            return False
+        shaping_delay = np.array([time - pkt[0] for pkt in self.backlog])
+        assert np.all(shaping_delay >= 0)
+        packet_arrival_time = np.zeros((len(self.backlog) + self.remaining_burst,), dtype=float)
+        for link_idx in range(len(self.transmission_delay)):
+            # Compute the departure time of the previous packet assuming the scheduler backlog remains unchanged
+            # upon the arrival of the first packet.
+            prev_departure = packet_arrival_time[0] + self.transmission_delay[link_idx] * self.scheduler_backlog[
+                link_idx]
+            for packet_idx in range(len(packet_arrival_time)):
+                # Compute the departure time of the packet.
+                packet_arrival = packet_arrival_time[packet_idx]
+                packet_departure = max(packet_arrival, prev_departure) + self.packet_size * self.transmission_delay[
+                    link_idx]
+                prev_departure = packet_departure
+                packet_departure += self.propagation_delay[link_idx]
+                packet_arrival_time[packet_idx] = packet_departure
+        packet_arrival_time[:len(shaping_delay)] += shaping_delay
+        worst_end_to_end_delay = np.amax(packet_arrival_time)
+        return worst_end_to_end_delay <= self.latency_target
+
+    def update_state(self, remaining_burst, scheduler_backlog):
+        self.remaining_burst = remaining_burst
+        assert isinstance(scheduler_backlog, np.ndarray) and np.size(scheduler_backlog) == self.num_link
+        self.scheduler_backlog = scheduler_backlog
+        return
+
+    def clear_backlog(self, time):
+        # Grant extra tokens to clear shaper backlog.
+        self.reset_token(time)
+        extra_token_num = len(self.backlog)
+        self.add_token(time, extra_token_num)
+        self.extra_waiting = False
         return
 
     def reset(self):
-        self.buffer_size = self.burst
-        self.active = True
-        self.backlog = []
-        self.max_backlog_size = 0
-        self.head_pointer = 0
-        self.token = self.burst
-        self.extra_token = 0
-        self.depart = 0
         super().reset()
+        self.remaining_burst = 0
+        self.scheduler_backlog = np.zeros_like(self.transmission_delay)
+        self.extra_waiting = False
+        self.extra_eligible = False
+        self.wait_time = 0
         return
 
 
@@ -233,8 +330,8 @@ class MultiSlopeShaper(NetworkComponent):
         self.flow_idx = flow_idx
         # Set each token bucket from the input list.
         for tb_idx, tb in enumerate(args):
-            assert isinstance(tb, TokenBucket), "Every argument passed into MultiSlopeShaper " \
-                                                "must be a TokenBucket instance."
+            assert isinstance(tb, PassiveExtraTokenBucket), "Every argument passed into MultiSlopeShaper " \
+                                                            "must be a TokenBucket instance."
             tb.component_idx = tb_idx
             tb.internal = True
             tb.next = self

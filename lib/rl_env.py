@@ -9,10 +9,10 @@ class RLNetworkEnv:
     """A network environment for RL sampling similar to a openai.gym environment."""
 
     def __init__(self, flow_profile, flow_path, reprofiling_delay, simulation_time=1000, scheduling_policy="fifo",
-                 shaping_mode="pfs", buffer_bound="infinite", arrival_pattern_type="sync", sync_jitter=0,
+                 shaping_mode="is", buffer_bound="infinite", arrival_pattern_type="sync", sync_jitter=0,
                  periodic_arrival_ratio=1.0, periodic_pattern_weight=(0.8, 0.1, 0.1), awake_dur=0,
-                 awake_dist="constant", sleep_dur="max", sleep_dist="constant", arrival_pattern=None,
-                 keep_per_hop_departure=True, repeat=False, scaling_factor=1.0, packet_size=1,
+                 awake_dist="constant", sleep_dur="max", sleep_dist="constant", arrival_pattern=None, passive_tb=False,
+                 tb_average_wait_time=0.5, keep_per_hop_departure=True, repeat=False, scaling_factor=1.0, packet_size=1,
                  busy_period_window_size=0, propagation_delay=0, tor=0.003, pause_interval=1, action_mode="add_token",
                  max_token_add=10, high_reward=1, low_reward=0.1, penalty=-10, reward_function_type="linear"):
         self.simulator = NetworkSimulator(flow_profile, flow_path, reprofiling_delay, simulation_time=simulation_time,
@@ -21,11 +21,18 @@ class RLNetworkEnv:
                                           sync_jitter=sync_jitter, periodic_arrival_ratio=periodic_arrival_ratio,
                                           periodic_pattern_weight=periodic_pattern_weight, awake_dur=awake_dur,
                                           awake_dist=awake_dist, sleep_dur=sleep_dur, sleep_dist=sleep_dist,
-                                          arrival_pattern=arrival_pattern,
+                                          arrival_pattern=arrival_pattern, passive_tb=passive_tb,
+                                          tb_average_wait_time=tb_average_wait_time,
                                           keep_per_hop_departure=keep_per_hop_departure, repeat=repeat,
                                           scaling_factor=scaling_factor, packet_size=packet_size,
                                           busy_period_window_size=busy_period_window_size,
                                           propagation_delay=propagation_delay, tor=tor)
+        if not passive_tb:
+            assert action_mode == "add_token", "The control mode must be 'add_token' to support shapers with " \
+                                               "proactively granted extra tokens."
+            assert shaping_mode == "is", "The shaping mode must be ingress shaping (is) to support shapers with " \
+                                         "proactively granted extra tokens."
+        self.passive_tb = passive_tb
         self.repeat = repeat
         self.pause_interval = pause_interval
         valid_mode = action_mode in ["add_token", "on_off"]
@@ -92,11 +99,22 @@ class RLNetworkEnv:
                     heapq.heappush(self.simulator.event_pool, event)
             return
 
+        def update_wait_time(reprofiler, average_wait_time):
+            for tb_idx in range(len(reprofiler.token_buckets)):
+                tb = reprofiler.token_buckets[tb_idx]
+                tb.average_wait_time = average_wait_time
+            return
+
         # Check the control action type and select the control function.
         if self.action_mode == "add_token":
-            assert np.issubdtype(action.dtype, np.number)
-            action = np.minimum(action, self.max_token_add)
-            action_func = add_token_to_reprofiler
+            if self.passive_tb:
+                assert np.issubdtype(action.dtype, np.number)
+                action = np.minimum(action, self.max_token_add)
+                action_func = add_token_to_reprofiler
+            else:
+                assert isinstance(action, float)
+                action = np.ones((self.simulator.num_flow,), dtype=float) * action
+                action_func = update_wait_time
         else:
             assert action.dtype == np.bool_
             action_func = activate_reprofiler
@@ -128,8 +146,10 @@ class RLNetworkEnv:
                 flow_end_to_end.append(packet_end_to_end)
             end_to_end.append(flow_end_to_end)
         # Record the network status.
+        remaining_tokens = []
         for state, tb, p in zip(states, self.simulator.token_buckets, self.simulator.packet_size):
             token_num = tb.peek(self.time)
+            remaining_tokens.append(token_num)
             state.append(token_num * p)
         if self.simulator.scheduling_policy == "fifo":
             if self.simulator.shaping_mode in ["pfs", "ils", "is", "ntb"]:
@@ -163,6 +183,12 @@ class RLNetworkEnv:
             su = scheduler_utilization[flow_idx]
             state.extend(sb)
             state.extend(su)
+        # Update the shaper states.
+        if self.action_mode == "add_token" and not self.passive_tb:
+            for flow_idx, flow_links in enumerate(self.simulator.flow_path):
+                ingress_tb = self.simulator.ingress_reprofilers[flow_idx]
+                ingress_tb.update_state(int(remaining_tokens[flow_idx]),
+                                        np.array(scheduler_backlog[flow_idx])[flow_links])
         # Compute the reward based on the end-to-end latency and determine whether the episode terminates.
         terminate, exceed_target = True, False
         reward = 0

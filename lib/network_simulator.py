@@ -7,7 +7,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import Enum
 
-from lib.traffic_shapers import NetworkComponent, TokenBucketFluid, TokenBucket, MultiSlopeShaper, InterleavedShaper
+from lib.traffic_shapers import NetworkComponent, TokenBucketFluid, PassiveExtraTokenBucket, \
+    ProactiveExtraTokenBucket, MultiSlopeShaper, InterleavedShaper
 from lib.schedulers import Scheduler, FIFOScheduler, SCEDScheduler, TokenBucketSCED, MultiSlopeShaperSCED
 
 
@@ -17,8 +18,8 @@ class NetworkSimulator:
     def __init__(self, flow_profile, flow_path, reprofiling_delay, simulation_time=1000, scheduling_policy="fifo",
                  shaping_mode="pfs", buffer_bound="infinite", arrival_pattern_type="sync", sync_jitter=0,
                  periodic_arrival_ratio=1.0, periodic_pattern_weight=(0.8, 0.1, 0.1), awake_dur=0,
-                 awake_dist="constant", sleep_dur="max", sleep_dist="constant", arrival_pattern=None,
-                 keep_per_hop_departure=True, repeat=False, scaling_factor=1.0, packet_size=1,
+                 awake_dist="constant", sleep_dur="max", sleep_dist="constant", arrival_pattern=None, passive_tb=True,
+                 tb_average_wait_time=0.5, keep_per_hop_departure=True, repeat=False, scaling_factor=1.0, packet_size=1,
                  busy_period_window_size=0, propagation_delay=0, tor=0.003):
         flow_profile = np.array(flow_profile)
         flow_path = np.array(flow_path)
@@ -66,6 +67,12 @@ class NetworkSimulator:
             except ValueError:
                 print("Please set sleep duration to 'min', 'max', or a number.")
         self.sleep_dur = sleep_dur
+        if not passive_tb:
+            assert shaping_mode == "is", "The shaping mode must be ingress shaping (is) to support shapers with " \
+                                         "proactively granted extra tokens."
+        self.passive_tb = passive_tb
+        assert tb_average_wait_time > 0, "Please set a positive average wait time to grant extra tokens."
+        self.tb_average_wait_time = tb_average_wait_time
         self.keep_per_hop_departure = keep_per_hop_departure
         self.repeat = repeat
         self.scaling_factor = scaling_factor
@@ -92,16 +99,6 @@ class NetworkSimulator:
         token_bucket_reprofiling_rate = reprofiling_rate / self.packet_size
         token_bucket_reprofiling_burst = reprofiling_burst / self.packet_size + 1
         remaining_delay = (flow_profile[:, 2] - reprofiling_delay) / np.sum(flow_path > 0, axis=1)
-
-        def get_reprofiler(flow_idx):
-            if self.shaping_mode == "ntb":
-                return MultiSlopeShaper(flow_idx, TokenBucket(self.token_bucket_profile[flow_idx, 0],
-                                                              self.token_bucket_profile[flow_idx, 1]))
-            else:
-                return MultiSlopeShaper(flow_idx, TokenBucket(self.token_bucket_profile[flow_idx, 0],
-                                                              token_bucket_reprofiling_burst[flow_idx]),
-                                        TokenBucket(token_bucket_reprofiling_rate[flow_idx], 1))
-
         # Retrieve the path of each flow.
         self.flow_path = []
         for flow_idx, path in enumerate(flow_path):
@@ -109,6 +106,57 @@ class NetworkSimulator:
             assert len(flow_links) > 0, "Every flow should traverse at least one hop."
             flow_links = flow_links[np.argsort(path[flow_links])]
             self.flow_path.append(flow_links)
+        # Compute the link parameters.
+        self.link_bandwidth = np.zeros((self.num_link,), dtype=float)
+        self.link_packetization_delay = np.zeros((self.num_link,), dtype=float)
+        self.link_buffer = [None] * self.num_link
+        for link_idx in range(self.num_link):
+            link_flow_mask = flow_path[:, link_idx] > 0
+            link_bandwidth = np.sum(reprofiling_rate[link_flow_mask]) * scaling_factor
+            if np.sum(link_flow_mask) > 0:
+                self.link_bandwidth[link_idx] = link_bandwidth
+                self.link_packetization_delay[link_idx] = np.sum(self.packet_size[link_flow_mask]) / link_bandwidth
+                if buffer_bound == "with_shaping":
+                    # Compute buffer bound assuming FIFO scheduling and per-flow shaping.
+                    # Add a maximum packet size to avoid buffer overflow due to numerical issues.
+                    self.link_buffer[link_idx] = (np.sum(self.packet_size[link_flow_mask]) + np.amax(
+                        self.packet_size[link_flow_mask])) * (1 + tor)
+        # Compute the expected latency bound (with small tolerance for numerical instability).
+        # Compute packetization delay from schedulers.
+        packetization_delay = np.sum(self.link_packetization_delay * (flow_path > 0), axis=1)
+        total_propagation_delay = np.sum(self.propagation_delay * (flow_path > 0), axis=1)
+        # self.latency_target = (reprofiling_delay + packetization_delay + total_propagation_delay) * (1 + tor)
+        self.latency_target = (flow_profile[:, 2] + packetization_delay + total_propagation_delay) * (1 + tor)
+
+        def get_reprofiler(flow_idx):
+            flow_transmission_delay = 1 / self.link_bandwidth[self.flow_path[flow_idx]]
+            flow_propagation_delay = self.propagation_delay[self.flow_path[flow_idx]]
+            if self.shaping_mode == "ntb":
+                if self.passive_tb:
+                    tb = PassiveExtraTokenBucket(self.token_bucket_profile[flow_idx, 0],
+                                                 self.token_bucket_profile[flow_idx, 1])
+                else:
+                    tb = ProactiveExtraTokenBucket(self.token_bucket_profile[flow_idx, 0],
+                                                   self.token_bucket_profile[flow_idx, 1], self.tb_average_wait_time,
+                                                   self.packet_size[flow_idx], self.latency_target[flow_idx],
+                                                   flow_transmission_delay, flow_propagation_delay)
+                return MultiSlopeShaper(flow_idx, tb)
+            else:
+                if self.passive_tb:
+                    tb1 = PassiveExtraTokenBucket(self.token_bucket_profile[flow_idx, 0],
+                                                  token_bucket_reprofiling_burst[flow_idx])
+                    tb2 = PassiveExtraTokenBucket(token_bucket_reprofiling_rate[flow_idx], 1)
+                else:
+                    tb1 = ProactiveExtraTokenBucket(self.token_bucket_profile[flow_idx, 0],
+                                                    token_bucket_reprofiling_burst[flow_idx], self.tb_average_wait_time,
+                                                    self.packet_size[flow_idx], self.latency_target[flow_idx],
+                                                    flow_transmission_delay, flow_propagation_delay)
+                    tb2 = ProactiveExtraTokenBucket(token_bucket_reprofiling_rate[flow_idx], 1,
+                                                    self.tb_average_wait_time, self.packet_size[flow_idx],
+                                                    self.latency_target[flow_idx], flow_transmission_delay,
+                                                    flow_propagation_delay)
+                return MultiSlopeShaper(flow_idx, tb1, tb2)
+
         # Register the token buckets profile of each flow.
         self.token_buckets = [TokenBucketFluid(f[0], f[1]) for f in self.token_bucket_profile]
         # Register the shapers according to the traffic shaping mode (under FIFO scheduling).
@@ -133,23 +181,13 @@ class NetworkSimulator:
                                                                       flow_group[link_pair]])
         # Register the link schedulers.
         self.schedulers = []
-        self.link_packetization_delay = np.zeros((self.num_link,), dtype=float)
         for link_idx in range(self.num_link):
             link_flow_mask = flow_path[:, link_idx] > 0
-            link_bandwidth = np.sum(reprofiling_rate[link_flow_mask]) * scaling_factor
-            link_buffer = None
-            if np.sum(link_flow_mask) > 0:
-                self.link_packetization_delay[link_idx] = np.sum(self.packet_size[link_flow_mask]) / link_bandwidth
-                if buffer_bound == "with_shaping":
-                    # Compute buffer bound assuming FIFO scheduling and per-flow shaping.
-                    # Add a maximum packet size to avoid buffer overflow due to numerical issues.
-                    link_buffer = (np.sum(self.packet_size[link_flow_mask]) + np.amax(
-                        self.packet_size[link_flow_mask])) * (1 + tor)
             if scheduling_policy == "fifo":
-                self.schedulers.append(FIFOScheduler(link_bandwidth, self.packet_size,
+                self.schedulers.append(FIFOScheduler(self.link_bandwidth[link_idx], self.packet_size,
                                                      busy_period_window_size=self.busy_period_window_size,
                                                      propagation_delay=self.propagation_delay[link_idx],
-                                                     buffer_size=link_buffer))
+                                                     buffer_size=self.link_buffer[link_idx]))
             elif scheduling_policy == "sced":
                 def get_reprofiler_sced(flow_idx):
                     return MultiSlopeShaperSCED(TokenBucketSCED(self.token_bucket_profile[flow_idx, 0],
@@ -157,17 +195,12 @@ class NetworkSimulator:
                                                 TokenBucketSCED(token_bucket_reprofiling_rate[flow_idx], 1))
 
                 self.schedulers.append(
-                    SCEDScheduler(link_bandwidth, self.packet_size, remaining_delay,
+                    SCEDScheduler(self.link_bandwidth[link_idx], self.packet_size, remaining_delay,
                                   *[(flow_idx, get_reprofiler_sced(flow_idx)) for flow_idx in
                                     np.arange(self.num_flow)[link_flow_mask]],
                                   busy_period_window_size=self.busy_period_window_size,
-                                  propagation_delay=self.propagation_delay[link_idx], buffer_size=link_buffer))
-        # Compute the expected latency bound (with small tolerance for numerical instability).
-        # Compute packetization delay from schedulers.
-        packetization_delay = np.sum(self.link_packetization_delay * (flow_path > 0), axis=1)
-        total_propagation_delay = np.sum(self.propagation_delay * (flow_path > 0), axis=1)
-        self.latency_target = (flow_profile[:, 2] + packetization_delay + total_propagation_delay) * (1 + tor)
-        # self.latency_target = (reprofiling_delay + packetization_delay) * (1 + tor)
+                                  propagation_delay=self.propagation_delay[link_idx],
+                                  buffer_size=self.link_buffer[link_idx]))
         # Connect the network components.
         for flow_idx, flow_links in enumerate(self.flow_path):
             # Append an empty component to the terminal component.
@@ -236,17 +269,30 @@ class NetworkSimulator:
     def simulate(self):
         while len(self.event_pool) > 0:
             event = heapq.heappop(self.event_pool)
-            if event.event_type == EventType.ARRIVAL:
+            if event.event_type == EventType.EXTRA_TOKEN:
+                event.component.clear_backlog(event.time)
+                # Add a packet forward event if at least one extra token is granted.
+                if len(event.component.backlog) > 0:
+                    tb_packet_number = event.component.backlog[0][1]
+                    forward_event = Event(event.time, EventType.FORWARD, event.flow_idx, tb_packet_number,
+                                          event.component, flag=True)
+                    heapq.heappush(self.event_pool, forward_event)
+            elif event.event_type == EventType.ARRIVAL:
                 # Start a busy period by creating a forward event if the component is idle upon arrival.
                 if event.component.arrive(event.time, event.packet_number, event.flow_idx, event.flag):
                     forward_event = Event(event.time, EventType.FORWARD, event.flow_idx, event.packet_number,
                                           event.component, flag=True)
                     heapq.heappush(self.event_pool, forward_event)
                 # Add a non-conformant packet forward event if the token bucket is not active.
-                if isinstance(event.component, TokenBucket) and not event.component.active:
+                if isinstance(event.component, PassiveExtraTokenBucket) and not event.component.active:
                     forward_event = Event(event.time, EventType.FORWARD, event.flow_idx, event.packet_number,
                                           event.component, flag=False)
                     heapq.heappush(self.event_pool, forward_event)
+                # Grant extra tokens after a random wait time.
+                if isinstance(event.component, ProactiveExtraTokenBucket) and event.component.extra_eligible:
+                    extra_token_event = Event(event.time + event.component.wait_time, EventType.EXTRA_TOKEN,
+                                              flow_idx=event.flow_idx, component=event.component)
+                    heapq.heappush(self.event_pool, extra_token_event)
             elif event.event_type == EventType.FORWARD:
                 (next_depart, next_idx, next_number, idle, forwarded_idx, forwarded_number,
                  next_component) = event.component.forward(event.time, event.packet_number, event.flow_idx, event.flag)
@@ -258,7 +304,7 @@ class NetworkSimulator:
                 # Create a packet arrival event for the next component.
                 departed = next_component is not None
                 is_next_ms = isinstance(next_component, MultiSlopeShaper)
-                is_internal_tb = isinstance(event.component, TokenBucket) and event.component.internal
+                is_internal_tb = isinstance(event.component, PassiveExtraTokenBucket) and event.component.internal
                 is_next_interleaved = isinstance(next_component, InterleavedShaper)
                 is_internal_ms = isinstance(event.component, MultiSlopeShaper) and event.component.internal
                 is_terminal = isinstance(event.component, Scheduler) and event.component.terminal[forwarded_idx]
@@ -556,6 +602,7 @@ class EventType(Enum):
     SUMMARY = 1
     FORWARD = 2
     ARRIVAL = 3
+    EXTRA_TOKEN = 4
 
 
 @dataclass

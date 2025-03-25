@@ -27,7 +27,7 @@ def getargs():
     args.add_argument('--sync-jitter', type=float, default=0,
                       help="Jitter for synchronized flow burst. Only active when the arrival pattern is 'sync_burst'.")
     args.add_argument('--periodic-arrival-ratio', type=float, default=1.0,
-                      help="Percent of flows that have periodic arrival patterns. Non-periodic flows send the maximum"
+                      help="Percent of flows that have periodic arrival patterns. Non-periodic flows send the maximum "
                            "amount of traffic throughout the simulation.")
     args.add_argument('--periodic-pattern-weight', type=float, default=[0.8, 0.1, 0.1], nargs='+',
                       help="The sampling weight of three periodic flow arrival patterns: 'awake', 'sleep', and "
@@ -35,10 +35,15 @@ def getargs():
     args.add_argument('--awake-dur', type=float, default=0.0, help="Length of awake time of periodic flows.")
     args.add_argument('--awake-dist', type=str, default="constant",
                       help="Periodic flow awake time distribution. Choose between 'exponential' and 'constant'.")
-    args.add_argument('--sleep-dur', type=str, default='max', help="Length of sleep time of periodic flows. Can be set"
+    args.add_argument('--sleep-dur', type=str, default='max', help="Length of sleep time of periodic flows. Can be set "
                                                                   "to 'min', 'max', or a number.")
     args.add_argument('--sleep-dist', type=str, default="constant",
                       help="Periodic flow sleep time distribution. Choose between 'uniform' and 'constant'.")
+    args.add_argument('--passive-tb', action="store_true", help="Whether extra tokens are granted passively or "
+                                                                "proactively.")
+    args.add_argument('--tb-average-wait-time', type=float, default=0.5, help="Average wait time before extra tokens "
+                                                                              "are granted. Only used when "
+                                                                              "'passive-tb' is not enabled.")
     args.add_argument('--pause-interval', type=float, default=1,
                       help="The length of a time step (in second) for the reinforcement learning environment.")
     args.add_argument('--action-mode', type=str, default="add_token",
@@ -75,7 +80,8 @@ if __name__ == '__main__':
                                sync_jitter=args.sync_jitter, periodic_arrival_ratio=args.periodic_arrival_ratio,
                                periodic_pattern_weight=tuple(args.periodic_pattern_weight),
                                awake_dur=args.awake_dur, awake_dist=args.awake_dist, sleep_dur=args.sleep_dur,
-                               sleep_dist=args.sleep_dist, arrival_pattern=None, keep_per_hop_departure=False,
+                               sleep_dist=args.sleep_dist, arrival_pattern=None, passive_tb=args.passive_tb,
+                               tb_average_wait_time=args.tb_average_wait_time, keep_per_hop_departure=False,
                                scaling_factor=1.0, packet_size=1, busy_period_window_size=args.pause_interval,
                                propagation_delay=0, pause_interval=args.pause_interval, action_mode=args.action_mode,
                                max_token_add=args.max_token_add, high_reward=args.high_reward,

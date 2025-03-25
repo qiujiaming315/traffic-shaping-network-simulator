@@ -39,7 +39,7 @@ def getargs():
     args.add_argument('--awake-dist', type=str, default="constant",
                       help="Periodic flow awake time distribution. Choose between 'exponential' and 'constant'.")
     args.add_argument('--sleep-dur', type=str, default='max', help="Length of sleep time of periodic flows. Can be set"
-                                                                  "to 'min', 'max', or a number.")
+                                                                   "to 'min', 'max', or a number.")
     args.add_argument('--sleep-dist', type=str, default="constant",
                       help="Periodic flow sleep time distribution. Choose between 'uniform' and 'constant'.")
     return args.parse_args()
@@ -65,9 +65,9 @@ if __name__ == '__main__':
                                  sync_jitter=args.sync_jitter, periodic_arrival_ratio=args.periodic_arrival_ratio,
                                  periodic_pattern_weight=tuple(args.periodic_pattern_weight),
                                  awake_dur=args.awake_dur, awake_dist=args.awake_dist, sleep_dur=args.sleep_dur,
-                                 sleep_dist=args.sleep_dist, arrival_pattern=None, keep_per_hop_departure=False,
-                                 repeat=False, scaling_factor=1.0, packet_size=1, busy_period_window_size=0,
-                                 propagation_delay=0)
+                                 sleep_dist=args.sleep_dist, arrival_pattern=None, passive_tb=True,
+                                 keep_per_hop_departure=False, repeat=False, scaling_factor=1.0, packet_size=1,
+                                 busy_period_window_size=0, propagation_delay=0)
     # Start the simulation.
     start = time.time()
     simulator.simulate()
