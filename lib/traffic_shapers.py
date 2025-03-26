@@ -176,9 +176,10 @@ class PassiveExtraTokenBucket(ExtraTokenBucket):
 
 class ProactiveExtraTokenBucket(PassiveExtraTokenBucket):
 
-    def __init__(self, rate, burst, average_wait_time, packet_size, latency_target, transmission_delay,
-                 propagation_delay, component_idx=0, internal=False):
+    def __init__(self, rate, burst, initial_remaining_burst, average_wait_time, packet_size, latency_target,
+                 transmission_delay, propagation_delay, component_idx=0, internal=False):
         super().__init__(rate, burst, component_idx=component_idx, internal=internal)
+        self.initial_remaining_burst = initial_remaining_burst
         assert average_wait_time > 0
         self.average_wait_time = average_wait_time
         self.packet_size = packet_size
@@ -188,7 +189,7 @@ class ProactiveExtraTokenBucket(PassiveExtraTokenBucket):
         self.num_link = len(transmission_delay)
         assert isinstance(propagation_delay, np.ndarray) and np.size(propagation_delay) == self.num_link
         self.propagation_delay = propagation_delay
-        self.remaining_burst = 0
+        self.remaining_burst = int(self.initial_remaining_burst)
         self.scheduler_backlog = np.zeros_like(transmission_delay)
         self.extra_waiting = False
         self.extra_eligible = False
@@ -229,7 +230,7 @@ class ProactiveExtraTokenBucket(PassiveExtraTokenBucket):
         return worst_end_to_end_delay <= self.latency_target
 
     def update_state(self, remaining_burst, scheduler_backlog):
-        self.remaining_burst = remaining_burst
+        self.remaining_burst = int(remaining_burst)
         assert isinstance(scheduler_backlog, np.ndarray) and np.size(scheduler_backlog) == self.num_link
         self.scheduler_backlog = scheduler_backlog
         return
@@ -244,7 +245,7 @@ class ProactiveExtraTokenBucket(PassiveExtraTokenBucket):
 
     def reset(self):
         super().reset()
-        self.remaining_burst = 0
+        self.remaining_burst = int(self.initial_remaining_burst)
         self.scheduler_backlog = np.zeros_like(self.transmission_delay)
         self.extra_waiting = False
         self.extra_eligible = False

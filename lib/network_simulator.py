@@ -137,6 +137,7 @@ class NetworkSimulator:
                                                  self.token_bucket_profile[flow_idx, 1])
                 else:
                     tb = ProactiveExtraTokenBucket(self.token_bucket_profile[flow_idx, 0],
+                                                   self.token_bucket_profile[flow_idx, 1],
                                                    self.token_bucket_profile[flow_idx, 1], self.tb_average_wait_time,
                                                    self.packet_size[flow_idx], self.latency_target[flow_idx],
                                                    flow_transmission_delay, flow_propagation_delay)
@@ -148,13 +149,14 @@ class NetworkSimulator:
                     tb2 = PassiveExtraTokenBucket(token_bucket_reprofiling_rate[flow_idx], 1)
                 else:
                     tb1 = ProactiveExtraTokenBucket(self.token_bucket_profile[flow_idx, 0],
-                                                    token_bucket_reprofiling_burst[flow_idx], self.tb_average_wait_time,
+                                                    token_bucket_reprofiling_burst[flow_idx],
+                                                    self.token_bucket_profile[flow_idx, 1], self.tb_average_wait_time,
                                                     self.packet_size[flow_idx], self.latency_target[flow_idx],
                                                     flow_transmission_delay, flow_propagation_delay)
                     tb2 = ProactiveExtraTokenBucket(token_bucket_reprofiling_rate[flow_idx], 1,
-                                                    self.tb_average_wait_time, self.packet_size[flow_idx],
-                                                    self.latency_target[flow_idx], flow_transmission_delay,
-                                                    flow_propagation_delay)
+                                                    self.token_bucket_profile[flow_idx, 1], self.tb_average_wait_time,
+                                                    self.packet_size[flow_idx], self.latency_target[flow_idx],
+                                                    flow_transmission_delay, flow_propagation_delay)
                 return MultiSlopeShaper(flow_idx, tb1, tb2)
 
         # Register the token buckets profile of each flow.
