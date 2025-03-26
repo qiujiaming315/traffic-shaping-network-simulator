@@ -51,6 +51,12 @@ class RLNetworkEnv:
         for time_step in np.arange(pause_interval, simulation_time + pause_interval, pause_interval):
             event = Event(time_step, EventType.SUMMARY)
             heapq.heappush(self.simulator.event_pool, event)
+        # Initialize the shaper state if extra tokens are granted proactively.
+        if self.action_mode == "add_token" and not self.passive_tb:
+            for flow_idx, flow_links in enumerate(self.simulator.flow_path):
+                ingress_tb = self.simulator.ingress_reprofilers[flow_idx]
+                ingress_tb.update_state(self.simulator.token_buckets[flow_idx].peek(0),
+                                        np.zeros_like(flow_links, dtype=float))
         # Keep the initial event pool for restoration upon resetting if repeatable.
         self.event_pool_copy = None
         if self.repeat:

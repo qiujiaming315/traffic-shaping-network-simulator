@@ -176,8 +176,8 @@ class PassiveExtraTokenBucket(ExtraTokenBucket):
 
 class ProactiveExtraTokenBucket(PassiveExtraTokenBucket):
 
-    def __init__(self, rate, burst, average_wait_time, packet_size, latency_target, transmission_delay, propagation_delay,
-                 component_idx=0, internal=False):
+    def __init__(self, rate, burst, average_wait_time, packet_size, latency_target, transmission_delay,
+                 propagation_delay, component_idx=0, internal=False):
         super().__init__(rate, burst, component_idx=component_idx, internal=internal)
         assert average_wait_time > 0
         self.average_wait_time = average_wait_time
