@@ -70,7 +70,8 @@ class RLNetworkEnv:
 
     def step(self, action):
         states = [[] for _ in range(self.simulator.num_flow)]
-        end_to_end = []
+        end_to_end_delay = []
+        shaping_delay = []
 
         def activate_reprofiler(reprofiler, a):
             reprofiler.activate(a)
@@ -138,13 +139,18 @@ class RLNetworkEnv:
         self.simulator.simulate()
         # Collect the end-to-end delay experienced by packets that reached the destination during the pause interval.
         for flow_idx, (old_count, new_count) in enumerate(zip(packet_count_old, self.simulator.packet_count)):
-            flow_end_to_end = []
+            flow_end_to_end, flow_shaping = [], []
             for packet_number in range(old_count, new_count):
                 packet_end_to_end = self.simulator.end_to_end_delay[flow_idx][packet_number]
+                packet_shaping = self.simulator.shaping_delay[flow_idx][packet_number]
                 if packet_end_to_end != -1:
+                    assert packet_shaping != -1
                     packet_end_to_end /= self.simulator.latency_target[flow_idx]
+                    packet_shaping /= self.simulator.latency_target[flow_idx]
                 flow_end_to_end.append(packet_end_to_end)
-            end_to_end.append(flow_end_to_end)
+                flow_shaping.append(packet_shaping)
+            end_to_end_delay.append(flow_end_to_end)
+            shaping_delay.append(flow_shaping)
         # Record the network status.
         for state, tb, p in zip(states, self.simulator.token_buckets, self.simulator.packet_size):
             token_num = tb.peek(self.time)
@@ -191,7 +197,7 @@ class RLNetworkEnv:
         # Compute the reward based on the end-to-end latency and determine whether the episode terminates.
         terminate, exceed_target = True, False
         reward = 0
-        for end in end_to_end:
+        for end in end_to_end_delay:
             flow_reward = 0
             for e in end:
                 flow_reward += self.reward_function(e)
@@ -203,7 +209,7 @@ class RLNetworkEnv:
             reward += flow_reward
         # if exceed_target:
         #     reward = self.penalty
-        return states, reward, terminate, exceed_target, end_to_end
+        return states, reward, terminate, exceed_target, (end_to_end_delay, shaping_delay)
 
     def reset(self, arrival_pattern=None):
         self.simulator.reset(arrival_pattern=arrival_pattern)
