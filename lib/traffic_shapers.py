@@ -176,10 +176,10 @@ class PassiveExtraTokenBucket(ExtraTokenBucket):
 
 class ProactiveExtraTokenBucket(PassiveExtraTokenBucket):
 
-    def __init__(self, rate, burst, initial_remaining_burst, average_wait_time, packet_size, latency_target,
+    def __init__(self, rate, burst, original_tb, average_wait_time, packet_size, latency_target,
                  transmission_delay, propagation_delay, component_idx=0, internal=False):
         super().__init__(rate, burst, component_idx=component_idx, internal=internal)
-        self.initial_remaining_burst = initial_remaining_burst
+        self.original_tb = original_tb
         assert average_wait_time > 0
         self.average_wait_time = average_wait_time
         self.packet_size = packet_size
@@ -189,8 +189,7 @@ class ProactiveExtraTokenBucket(PassiveExtraTokenBucket):
         self.num_link = len(transmission_delay)
         assert isinstance(propagation_delay, np.ndarray) and np.size(propagation_delay) == self.num_link
         self.propagation_delay = propagation_delay
-        self.remaining_burst = int(self.initial_remaining_burst)
-        self.scheduler_backlog = np.zeros_like(transmission_delay)
+        self.scheduler_utilization = np.zeros_like(transmission_delay)
         self.extra_waiting = False
         self.extra_eligible = False
         self.wait_time = 0
@@ -211,17 +210,25 @@ class ProactiveExtraTokenBucket(PassiveExtraTokenBucket):
             return False
         shaping_delay = np.array([time - pkt[0] for pkt in self.backlog])
         assert np.all(shaping_delay >= 0)
-        packet_arrival_time = np.zeros((len(self.backlog) + self.remaining_burst,), dtype=float)
+        # Check the remaining burst from the original token bucket profile.
+        remaining_burst = int(self.original_tb.peek(time))
+        packet_arrival_time = np.zeros((len(self.backlog) + remaining_burst,), dtype=float)
         for link_idx in range(len(self.transmission_delay)):
-            # Compute the departure time of the previous packet assuming the scheduler backlog remains unchanged
-            # upon the arrival of the first packet.
-            prev_departure = packet_arrival_time[0] + self.transmission_delay[link_idx] * self.scheduler_backlog[
-                link_idx]
+            # # Compute the departure time of the previous packet assuming the scheduler backlog remains unchanged
+            # # upon the arrival of the first packet.
+            # prev_departure = packet_arrival_time[0] + self.transmission_delay[link_idx] * self.scheduler_backlog[
+            #     link_idx]
+
+            # Compute the transmission time of each packet assuming the scheduler is Processor Sharing (PS) instead of
+            # FIFO and the link utilization remains unchanged.
+            prev_departure = packet_arrival_time[0]
+            # Set available bandwidth to be at least 1% to avoid infinite transmission time.
+            link_available_bandwidth = max(1 - self.scheduler_utilization[link_idx], 0.01)
+            link_transmission_delay = self.transmission_delay[link_idx] / link_available_bandwidth
             for packet_idx in range(len(packet_arrival_time)):
                 # Compute the departure time of the packet.
                 packet_arrival = packet_arrival_time[packet_idx]
-                packet_departure = max(packet_arrival, prev_departure) + self.packet_size * self.transmission_delay[
-                    link_idx]
+                packet_departure = max(packet_arrival, prev_departure) + self.packet_size * link_transmission_delay
                 prev_departure = packet_departure
                 packet_departure += self.propagation_delay[link_idx]
                 packet_arrival_time[packet_idx] = packet_departure
@@ -229,10 +236,10 @@ class ProactiveExtraTokenBucket(PassiveExtraTokenBucket):
         worst_end_to_end_delay = np.amax(packet_arrival_time)
         return worst_end_to_end_delay <= self.latency_target
 
-    def update_state(self, remaining_burst, scheduler_backlog):
-        self.remaining_burst = int(remaining_burst)
-        assert isinstance(scheduler_backlog, np.ndarray) and np.size(scheduler_backlog) == self.num_link
-        self.scheduler_backlog = scheduler_backlog
+    def update_state(self, scheduler_utilization):
+        assert isinstance(scheduler_utilization, np.ndarray) and np.size(scheduler_utilization) == self.num_link
+        assert np.all(0 <= scheduler_utilization) and np.all(scheduler_utilization <= 1)
+        self.scheduler_utilization = scheduler_utilization
         return
 
     def clear_backlog(self, time):
@@ -245,8 +252,7 @@ class ProactiveExtraTokenBucket(PassiveExtraTokenBucket):
 
     def reset(self):
         super().reset()
-        self.remaining_burst = int(self.initial_remaining_burst)
-        self.scheduler_backlog = np.zeros_like(self.transmission_delay)
+        self.scheduler_utilization = np.zeros_like(self.transmission_delay)
         self.extra_waiting = False
         self.extra_eligible = False
         self.wait_time = 0

@@ -146,10 +146,8 @@ class RLNetworkEnv:
                 flow_end_to_end.append(packet_end_to_end)
             end_to_end.append(flow_end_to_end)
         # Record the network status.
-        remaining_tokens = []
         for state, tb, p in zip(states, self.simulator.token_buckets, self.simulator.packet_size):
             token_num = tb.peek(self.time)
-            remaining_tokens.append(token_num)
             state.append(token_num * p)
         if self.simulator.scheduling_policy == "fifo":
             if self.simulator.shaping_mode in ["pfs", "ils", "is", "ntb"]:
@@ -188,8 +186,7 @@ class RLNetworkEnv:
             for flow_idx, flow_links in enumerate(self.simulator.flow_path):
                 ingress_shaper = self.simulator.ingress_reprofilers[flow_idx]
                 for tb in ingress_shaper.token_buckets:
-                    tb.update_state(remaining_tokens[flow_idx],
-                                    np.array(scheduler_backlog[flow_idx])[flow_links])
+                    tb.update_state(np.array(scheduler_utilization[flow_idx])[flow_links])
         # Compute the reward based on the end-to-end latency and determine whether the episode terminates.
         terminate, exceed_target = True, False
         reward = 0
