@@ -335,7 +335,7 @@ class TokenBucketFluid:
 
 class MultiSlopeShaper(NetworkComponent):
 
-    def __init__(self, flow_idx, *args, internal=False):
+    def __init__(self, flow_idx, *args, ingress=False, internal=False):
         self.flow_idx = flow_idx
         # Set each token bucket from the input list.
         for tb_idx, tb in enumerate(args):
@@ -344,6 +344,7 @@ class MultiSlopeShaper(NetworkComponent):
             tb.component_idx = tb_idx
             tb.internal = True
             tb.next = self
+        self.ingress = ingress
         self.internal = internal
         self.token_buckets = args
         self.eligible_packets = [[] for _ in range(len(args))]

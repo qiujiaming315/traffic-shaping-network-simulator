@@ -164,7 +164,11 @@ class NetworkSimulator:
         # Register the shapers according to the traffic shaping mode (under FIFO scheduling).
         if scheduling_policy == "fifo":
             if shaping_mode in ["pfs", "ils", "is", "ntb"]:
-                self.ingress_reprofilers = [get_reprofiler(flow_idx) for flow_idx in range(self.num_flow)]
+                self.ingress_reprofilers = []
+                for flow_idx in range(self.num_flow):
+                    ingress_reprofiler = get_reprofiler(flow_idx)
+                    ingress_reprofiler.ingress = True
+                    self.ingress_reprofilers.append(ingress_reprofiler)
             if shaping_mode in ["pfs", "ntb"]:
                 self.reprofilers = dict()
                 for link_idx in range(self.num_link):
@@ -261,6 +265,7 @@ class NetworkSimulator:
                                    range(self.num_flow)]
         else:
             self.departure_time = None
+        self.shaping_delay = [[-1] * len(self.arrival_time[flow_idx]) for flow_idx in range(self.num_flow)]
         self.end_to_end_delay = [[-1] * len(self.arrival_time[flow_idx]) for flow_idx in range(self.num_flow)]
         # Keep the initial event pool for restoration upon resetting if repeatable.
         self.event_pool_copy = None
@@ -309,6 +314,7 @@ class NetworkSimulator:
                 is_internal_tb = isinstance(event.component, PassiveExtraTokenBucket) and event.component.internal
                 is_next_interleaved = isinstance(next_component, InterleavedShaper)
                 is_internal_ms = isinstance(event.component, MultiSlopeShaper) and event.component.internal
+                is_ingress = isinstance(event.component, MultiSlopeShaper) and event.component.ingress
                 is_terminal = isinstance(event.component, Scheduler) and event.component.terminal[forwarded_idx]
                 link_propagation_delay = event.component.propagation_delay if isinstance(event.component,
                                                                                          Scheduler) else 0
@@ -330,6 +336,11 @@ class NetworkSimulator:
                     # Record the packet departure time.
                     if not (is_internal_tb or is_internal_ms) and self.keep_per_hop_departure:
                         self.departure_time[forwarded_idx][forwarded_number].append(event.time)
+                    # Compute the shaping delay.
+                    if is_ingress:
+                        self.shaping_delay[forwarded_idx][forwarded_number] = event.time - \
+                                                                              self.arrival_time[forwarded_idx][
+                                                                                  forwarded_number]
                     # Update the packet count and compute end-to-end latency.
                     if is_terminal:
                         self.packet_count[forwarded_idx] = forwarded_number + 1
@@ -596,6 +607,7 @@ class NetworkSimulator:
                                    range(self.num_flow)]
         else:
             self.departure_time = None
+        self.shaping_delay = [[-1] * len(self.arrival_time[flow_idx]) for flow_idx in range(self.num_flow)]
         self.end_to_end_delay = [[-1] * len(self.arrival_time[flow_idx]) for flow_idx in range(self.num_flow)]
         return
 
