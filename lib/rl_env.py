@@ -186,7 +186,8 @@ class RLNetworkEnv:
             for flow_idx, flow_links in enumerate(self.simulator.flow_path):
                 ingress_shaper = self.simulator.ingress_reprofilers[flow_idx]
                 for tb in ingress_shaper.token_buckets:
-                    tb.update_state(np.array(scheduler_utilization[flow_idx])[flow_links])
+                    tb.update_state(np.array(scheduler_backlog[flow_idx])[flow_links],
+                                    np.array(scheduler_utilization[flow_idx])[flow_links])
         # Compute the reward based on the end-to-end latency and determine whether the episode terminates.
         terminate, exceed_target = True, False
         reward = 0

@@ -189,6 +189,7 @@ class ProactiveExtraTokenBucket(PassiveExtraTokenBucket):
         self.num_link = len(transmission_delay)
         assert isinstance(propagation_delay, np.ndarray) and np.size(propagation_delay) == self.num_link
         self.propagation_delay = propagation_delay
+        self.scheduler_backlog = np.zeros_like(transmission_delay)
         self.scheduler_utilization = np.zeros_like(transmission_delay)
         self.extra_waiting = False
         self.extra_eligible = False
@@ -214,17 +215,14 @@ class ProactiveExtraTokenBucket(PassiveExtraTokenBucket):
         remaining_burst = int(self.original_tb.peek(time))
         packet_arrival_time = np.zeros((len(self.backlog) + remaining_burst,), dtype=float)
         for link_idx in range(len(self.transmission_delay)):
-            # # Compute the departure time of the previous packet assuming the scheduler backlog remains unchanged
-            # # upon the arrival of the first packet.
-            # prev_departure = packet_arrival_time[0] + self.transmission_delay[link_idx] * self.scheduler_backlog[
-            #     link_idx]
-
-            # Compute the transmission time of each packet assuming the scheduler is Processor Sharing (PS) instead of
-            # FIFO and the link utilization remains unchanged.
-            prev_departure = packet_arrival_time[0]
-            # Set available bandwidth to be at least 1% to avoid infinite transmission time.
+            # Compute the transmission time of each packet assuming the scheduler is Processor Sharing (PS) and the
+            # link utilization remains unchanged. Set available bandwidth to be at least 1% to avoid infinite
+            # transmission time.
             link_available_bandwidth = max(1 - self.scheduler_utilization[link_idx], 0.01)
             link_transmission_delay = self.transmission_delay[link_idx] / link_available_bandwidth
+            # Compute the departure time of the previous packet assuming the scheduler backlog remains unchanged
+            # upon the arrival of the first packet.
+            prev_departure = packet_arrival_time[0] + link_transmission_delay * self.scheduler_backlog[link_idx]
             for packet_idx in range(len(packet_arrival_time)):
                 # Compute the departure time of the packet.
                 packet_arrival = packet_arrival_time[packet_idx]
@@ -236,9 +234,12 @@ class ProactiveExtraTokenBucket(PassiveExtraTokenBucket):
         worst_end_to_end_delay = np.amax(packet_arrival_time)
         return worst_end_to_end_delay <= self.latency_target
 
-    def update_state(self, scheduler_utilization):
+    def update_state(self, scheduler_backlog, scheduler_utilization):
+        assert isinstance(scheduler_backlog, np.ndarray) and np.size(scheduler_backlog) == self.num_link
         assert isinstance(scheduler_utilization, np.ndarray) and np.size(scheduler_utilization) == self.num_link
+        assert np.all(0 <= scheduler_backlog)
         assert np.all(0 <= scheduler_utilization) and np.all(scheduler_utilization <= 1)
+        self.scheduler_backlog = scheduler_backlog
         self.scheduler_utilization = scheduler_utilization
         return
 
@@ -252,6 +253,7 @@ class ProactiveExtraTokenBucket(PassiveExtraTokenBucket):
 
     def reset(self):
         super().reset()
+        self.scheduler_backlog = np.zeros_like(self.transmission_delay)
         self.scheduler_utilization = np.zeros_like(self.transmission_delay)
         self.extra_waiting = False
         self.extra_eligible = False
