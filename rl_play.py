@@ -41,7 +41,8 @@ def getargs():
                       help="Periodic flow sleep time distribution. Choose between 'uniform' and 'constant'.")
     args.add_argument('--passive-tb', action="store_true", help="Whether extra tokens are granted passively or "
                                                                 "proactively.")
-    args.add_argument('--tb-average-wait-time', type=float, default=0.5, help="Average wait time before extra tokens "
+    args.add_argument('--tb-average-wait-time', type=float, default=0.5, help="Average wait time (relative to the flow "
+                                                                              "hard delay bound) before extra tokens "
                                                                               "are granted. Only used when "
                                                                               "'passive-tb' is not enabled.")
     args.add_argument('--pause-interval', type=float, default=1,
@@ -83,7 +84,8 @@ if __name__ == '__main__':
                                sleep_dist=args.sleep_dist, arrival_pattern=None, passive_tb=args.passive_tb,
                                tb_average_wait_time=args.tb_average_wait_time, keep_per_hop_departure=False,
                                scaling_factor=1.0, packet_size=1, busy_period_window_size=args.pause_interval,
-                               propagation_delay=0, pause_interval=args.pause_interval, action_mode=args.action_mode,
+                               max_backlog_window_size=args.pause_interval, propagation_delay=0,
+                               pause_interval=args.pause_interval, action_mode=args.action_mode,
                                max_token_add=args.max_token_add, high_reward=args.high_reward,
                                low_reward=args.low_reward, penalty=args.penalty,
                                reward_function_type=args.reward_function_type)

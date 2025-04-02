@@ -13,8 +13,9 @@ class RLNetworkEnv:
                  periodic_arrival_ratio=1.0, periodic_pattern_weight=(0.8, 0.1, 0.1), awake_dur=0,
                  awake_dist="constant", sleep_dur="max", sleep_dist="constant", arrival_pattern=None, passive_tb=False,
                  tb_average_wait_time=0.5, keep_per_hop_departure=True, repeat=False, scaling_factor=1.0, packet_size=1,
-                 busy_period_window_size=0, propagation_delay=0, tor=0.003, pause_interval=1, action_mode="add_token",
-                 max_token_add=10, high_reward=1, low_reward=0.1, penalty=-10, reward_function_type="linear"):
+                 busy_period_window_size=0, max_backlog_window_size=0, propagation_delay=0, tor=0.003, pause_interval=1,
+                 action_mode="add_token", max_token_add=10, high_reward=1, low_reward=0.1, penalty=-10,
+                 reward_function_type="linear"):
         self.simulator = NetworkSimulator(flow_profile, flow_path, reprofiling_delay, simulation_time=simulation_time,
                                           scheduling_policy=scheduling_policy, shaping_mode=shaping_mode,
                                           buffer_bound=buffer_bound, arrival_pattern_type=arrival_pattern_type,
@@ -26,6 +27,7 @@ class RLNetworkEnv:
                                           keep_per_hop_departure=keep_per_hop_departure, repeat=repeat,
                                           scaling_factor=scaling_factor, packet_size=packet_size,
                                           busy_period_window_size=busy_period_window_size,
+                                          max_backlog_window_size=max_backlog_window_size,
                                           propagation_delay=propagation_delay, tor=tor)
         if not passive_tb:
             assert action_mode == "add_token", "The control mode must be 'add_token' to support shapers with " \
@@ -100,10 +102,10 @@ class RLNetworkEnv:
                     heapq.heappush(self.simulator.event_pool, event)
             return
 
-        def update_wait_time(reprofiler, average_wait_time):
+        def update_wait_time(reprofiler, average_wait_time_multiplier):
             for tb_idx in range(len(reprofiler.token_buckets)):
                 tb = reprofiler.token_buckets[tb_idx]
-                tb.average_wait_time = average_wait_time
+                tb.average_wait_time *= average_wait_time_multiplier
             return
 
         # Check the control action type and select the control function.
@@ -171,11 +173,14 @@ class RLNetworkEnv:
                             rb = self.simulator.reprofilers[(link_idx, flow_idx)].peek(self.time)
                             reprofiler_backlog[flow_idx][link_idx + 1] = rb * self.simulator.packet_size[flow_idx]
         scheduler_backlog = [[0] * self.simulator.num_link for _ in range(self.simulator.num_flow)]
+        scheduler_max_backlog = [[0] * self.simulator.num_link for _ in range(self.simulator.num_flow)]
         scheduler_utilization = [[0] * self.simulator.num_link for _ in range(self.simulator.num_flow)]
         for flow_idx, flow_links in enumerate(self.simulator.flow_path):
             for link_idx in flow_links:
                 sb, su = self.simulator.schedulers[link_idx].peek(self.time)
+                max_backlog = self.simulator.schedulers[link_idx].get_recent_max_backlog(self.time)
                 scheduler_backlog[flow_idx][link_idx] = sb
+                scheduler_max_backlog[flow_idx][link_idx] = max_backlog
                 scheduler_utilization[flow_idx][link_idx] = su
         for flow_idx in range(self.simulator.num_flow):
             state = states[flow_idx]
@@ -192,21 +197,22 @@ class RLNetworkEnv:
             for flow_idx, flow_links in enumerate(self.simulator.flow_path):
                 ingress_shaper = self.simulator.ingress_reprofilers[flow_idx]
                 for tb in ingress_shaper.token_buckets:
-                    tb.update_state(np.array(scheduler_backlog[flow_idx])[flow_links],
-                                    np.array(scheduler_utilization[flow_idx])[flow_links])
+                    tb.update_state(np.array(scheduler_max_backlog[flow_idx])[flow_links])
         # Compute the reward based on the end-to-end latency and determine whether the episode terminates.
-        terminate, exceed_target = True, False
+        exceed_target = False
         reward = 0
         for end in end_to_end_delay:
-            flow_reward = 0
-            for e in end:
-                flow_reward += self.reward_function(e)
-                if e == -1 or e > 1:
-                    exceed_target = True
-            if len(self.simulator.event_pool) > 0:
-                terminate = False
+            if len(end) == 0:
+                flow_reward = 0
+            elif np.any([e == -1 or e > 1 for e in end]):
+                exceed_target = True
+                flow_reward = self.penalty
+            else:
+                flow_reward = self.reward_function(np.mean(end))
             # flow_reward = 0 if len(end) == 0 else flow_reward / len(end)
             reward += flow_reward
+        reward /= self.simulator.num_flow
+        terminate = len(self.simulator.event_pool) == 0
         # if exceed_target:
         #     reward = self.penalty
         return states, reward, terminate, exceed_target, (end_to_end_delay, shaping_delay)

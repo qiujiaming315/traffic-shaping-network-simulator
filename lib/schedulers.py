@@ -9,15 +9,18 @@ from lib.traffic_shapers import NetworkComponent
 class Scheduler(NetworkComponent):
     """Parent class of network schedulers."""
 
-    def __init__(self, bandwidth, packet_size, busy_period_window_size=0, propagation_delay=0, buffer_size=None):
+    def __init__(self, bandwidth, packet_size, busy_period_window_size=0, max_backlog_window_size=0,
+                 propagation_delay=0, buffer_size=None):
         self.bandwidth = bandwidth
         self.packet_size = packet_size
         self.busy_period_window_size = busy_period_window_size
+        self.max_backlog_window_size = max_backlog_window_size
         self.propagation_delay = propagation_delay
         self.buffer_size = buffer_size
         self.num_flow = len(packet_size)
         self.backlog = []
         self.max_backlog_size = 0
+        self.max_backlog_size_recent = []
         self.busy_period = []
         self.depart = 0
         self.terminal = [False] * self.num_flow
@@ -33,7 +36,17 @@ class Scheduler(NetworkComponent):
         # Add the packet and its flow index to the backlog.
         if buffer_available:
             self.add_packet(time, packet_number, component_idx)
-            self.max_backlog_size = max(self.max_backlog_size, self.peek_backlog(time))
+            backlog_size = self.peek_backlog(time)
+            self.max_backlog_size = max(self.max_backlog_size, backlog_size)
+            # Update recent max backlog sliding window.
+            self.update_recent_max_backlog(time)
+            while len(self.max_backlog_size_recent) > 0:
+                recent_backlog = self.max_backlog_size_recent[-1][1]
+                if recent_backlog <= backlog_size:
+                    self.max_backlog_size_recent.pop()
+                else:
+                    break
+            self.max_backlog_size_recent.append((time, backlog_size))
         return self.idle
 
     def add_packet(self, time, packet_number, component_idx):
@@ -95,9 +108,26 @@ class Scheduler(NetworkComponent):
     def peek(self, time):
         return self.peek_backlog(time), self.peek_utlization(time)
 
+    def update_recent_max_backlog(self, time):
+        # Remove outdated backlog observations.
+        while len(self.max_backlog_size_recent) > 0:
+            backlog_time = self.max_backlog_size_recent[0][0]
+            if backlog_time < time - self.max_backlog_window_size:
+                self.max_backlog_size_recent.pop(0)
+            else:
+                break
+        return
+
+    def get_recent_max_backlog(self, time):
+        self.update_recent_max_backlog(time)
+        if len(self.max_backlog_size_recent) == 0:
+            return 0
+        return self.max_backlog_size_recent[0][1]
+
     def reset(self):
         self.backlog = []
         self.max_backlog_size = 0
+        self.max_backlog_size_recent = []
         self.busy_period = []
         self.depart = 0
         self.next_packet = None
@@ -108,9 +138,11 @@ class Scheduler(NetworkComponent):
 class FIFOScheduler(Scheduler):
     """FIFO Scheduler."""
 
-    def __init__(self, bandwidth, packet_size, busy_period_window_size=0, propagation_delay=0, buffer_size=None):
+    def __init__(self, bandwidth, packet_size, busy_period_window_size=0, max_backlog_window_size=0,
+                 propagation_delay=0, buffer_size=None):
         super().__init__(bandwidth, packet_size, busy_period_window_size=busy_period_window_size,
-                         propagation_delay=propagation_delay, buffer_size=buffer_size)
+                         max_backlog_window_size=max_backlog_window_size, propagation_delay=propagation_delay,
+                         buffer_size=buffer_size)
         return
 
     def add_packet(self, time, packet_number, component_idx):
@@ -179,10 +211,11 @@ class MultiSlopeShaperSCED:
 class SCEDScheduler(Scheduler):
     """SCED scheduler."""
 
-    def __init__(self, bandwidth, packet_size, offset, *args, busy_period_window_size=0, propagation_delay=0,
-                 buffer_size=None):
+    def __init__(self, bandwidth, packet_size, offset, *args, busy_period_window_size=0, max_backlog_window_size=0,
+                 propagation_delay=0, buffer_size=None):
         super().__init__(bandwidth, packet_size, busy_period_window_size=busy_period_window_size,
-                         propagation_delay=propagation_delay, buffer_size=buffer_size)
+                         max_backlog_window_size=max_backlog_window_size, propagation_delay=propagation_delay,
+                         buffer_size=buffer_size)
         self.multi_slope_shapers = [MultiSlopeShaperSCED()] * self.num_flow
         for flow_idx, ms in args:
             assert isinstance(ms, MultiSlopeShaperSCED), "Every argument passed into SCEDScheduler " \
