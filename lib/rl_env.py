@@ -178,7 +178,7 @@ class RLNetworkEnv:
         for flow_idx, flow_links in enumerate(self.simulator.flow_path):
             for link_idx in flow_links:
                 sb, su = self.simulator.schedulers[link_idx].peek(self.time)
-                max_backlog = self.simulator.schedulers[link_idx].get_recent_max_backlog(self.time)
+                max_backlog = self.simulator.schedulers[link_idx].peek_recent_max_backlog(self.time)
                 scheduler_backlog[flow_idx][link_idx] = sb
                 scheduler_max_backlog[flow_idx][link_idx] = max_backlog
                 scheduler_utilization[flow_idx][link_idx] = su

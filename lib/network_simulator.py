@@ -49,8 +49,10 @@ class NetworkSimulator:
             "Please set the flow periodic arrival pattern weights to be a tuple of 3 elements representing the " \
             "weight of selecting 'awake', 'sleep', or 'keep awake' as the periodic pattern, respectively."
         self.periodic_pattern_weight = np.array(periodic_pattern_weight)
-        assert np.all(self.periodic_pattern_weight > 0), "Please set the flow awake sampling weights to positive " \
-                                                         "values."
+        assert np.all(self.periodic_pattern_weight >= 0), "Please set the flow awake sampling weights to " \
+                                                          "non-negative values."
+        assert np.any(self.periodic_pattern_weight > 0), "Please set at least one flow awake sampling weight to a " \
+                                                         "positive value."
         self.periodic_pattern_weight /= np.sum(self.periodic_pattern_weight)
         valid_awake = awake_dist in ["exponential", "constant"]
         assert valid_awake, "Please choose an awake duration distribution between 'exponential' and 'constant'."

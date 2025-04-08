@@ -118,10 +118,11 @@ class Scheduler(NetworkComponent):
                 break
         return
 
-    def get_recent_max_backlog(self, time):
+    def peek_recent_max_backlog(self, time):
+        # Return the max backlog size over the last sliding window.
         self.update_recent_max_backlog(time)
         if len(self.max_backlog_size_recent) == 0:
-            return 0
+            return self.peek_backlog(time)
         return self.max_backlog_size_recent[0][1]
 
     def reset(self):
