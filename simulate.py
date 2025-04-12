@@ -32,9 +32,11 @@ def getargs():
     args.add_argument('--periodic-arrival-ratio', type=float, default=1.0,
                       help="Percent of flows that have periodic arrival patterns. Non-periodic flows send the maximum"
                            "amount of traffic throughout the simulation.")
-    args.add_argument('--periodic-pattern-weight', type=float, default=[0.8, 0.1, 0.1], nargs='+',
-                      help="The sampling weight of three periodic flow arrival patterns: 'awake', 'sleep', and "
-                           "'keep awake'.")
+    args.add_argument('--periodic-pattern-dist', type=float, default=[0.8, 0.1, 0.1], nargs='+',
+                      help="A sequence of 3-element distributions, each representing the probability of selecting "
+                           "'awake', 'sleep', or 'keep awake' as the periodic pattern, respectively.")
+    args.add_argument('--periodic-pattern-dist-weight', type=float, default=[1.0], nargs='+',
+                      help="The sampling weight of the arrival pattern distributions.")
     args.add_argument('--awake-dur', type=float, default=0.0, help="Length of awake time of periodic flows.")
     args.add_argument('--awake-dist', type=str, default="constant",
                       help="Periodic flow awake time distribution. Choose between 'exponential' and 'constant'.")
@@ -63,7 +65,8 @@ if __name__ == '__main__':
                                  scheduling_policy=args.scheduling_policy, shaping_mode=args.shaping_mode,
                                  buffer_bound=args.buffer_bound, arrival_pattern_type=args.arrival_pattern_type,
                                  sync_jitter=args.sync_jitter, periodic_arrival_ratio=args.periodic_arrival_ratio,
-                                 periodic_pattern_weight=tuple(args.periodic_pattern_weight),
+                                 periodic_pattern_dist=np.array(args.periodic_pattern_dist).reshape(-1, 3),
+                                 periodic_pattern_dist_weight=tuple(args.periodic_pattern_dist_weight),
                                  awake_dur=args.awake_dur, awake_dist=args.awake_dist, sleep_dur=args.sleep_dur,
                                  sleep_dist=args.sleep_dist, arrival_pattern=None, passive_tb=True,
                                  keep_per_hop_departure=False, repeat=False, scaling_factor=1.0, packet_size=1,

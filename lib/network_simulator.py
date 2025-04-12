@@ -17,9 +17,10 @@ class NetworkSimulator:
 
     def __init__(self, flow_profile, flow_path, reprofiling_delay, simulation_time=1000, scheduling_policy="fifo",
                  shaping_mode="pfs", buffer_bound="infinite", arrival_pattern_type="sync", sync_jitter=0,
-                 periodic_arrival_ratio=1.0, periodic_pattern_weight=(0.8, 0.1, 0.1), awake_dur=0,
-                 awake_dist="constant", sleep_dur="max", sleep_dist="constant", arrival_pattern=None, passive_tb=True,
-                 tb_average_wait_time=0.5, keep_per_hop_departure=True, repeat=False, scaling_factor=1.0, packet_size=1,
+                 periodic_arrival_ratio=1.0, periodic_pattern_dist=((0.8, 0.1, 0.1),),
+                 periodic_pattern_dist_weight=(1.0,), awake_dur=0, awake_dist="constant", sleep_dur="max",
+                 sleep_dist="constant", arrival_pattern=None, passive_tb=True, tb_average_wait_time=0.5,
+                 keep_per_hop_departure=True, repeat=False, scaling_factor=1.0, packet_size=1,
                  busy_period_window_size=0, max_backlog_window_size=0, propagation_delay=0, tor=0.003):
         flow_profile = np.array(flow_profile)
         flow_path = np.array(flow_path)
@@ -45,15 +46,26 @@ class NetworkSimulator:
         self.sync_jitter = sync_jitter
         assert 0 <= periodic_arrival_ratio <= 1, "Please choose a periodic arrival ratio within the range [0, 1]."
         self.periodic_arrival_ratio = periodic_arrival_ratio
-        assert isinstance(periodic_pattern_weight, tuple) and len(periodic_pattern_weight) == 3, \
-            "Please set the flow periodic arrival pattern weights to be a tuple of 3 elements representing the " \
-            "weight of selecting 'awake', 'sleep', or 'keep awake' as the periodic pattern, respectively."
-        self.periodic_pattern_weight = np.array(periodic_pattern_weight)
-        assert np.all(self.periodic_pattern_weight >= 0), "Please set the flow awake sampling weights to " \
-                                                          "non-negative values."
-        assert np.any(self.periodic_pattern_weight > 0), "Please set at least one flow awake sampling weight to a " \
-                                                         "positive value."
-        self.periodic_pattern_weight /= np.sum(self.periodic_pattern_weight)
+        assert all([len(d) == 3 for d in periodic_pattern_dist]), \
+            "Please set the flow periodic arrival pattern to be a sequence of 3-element distributions, each " \
+            "representing the probability of selecting 'awake', 'sleep', or 'keep awake' as the periodic pattern, " \
+            "respectively."
+        assert isinstance(periodic_pattern_dist_weight, tuple) and len(periodic_pattern_dist_weight) == len(
+            periodic_pattern_dist), "Please set the sampling weight of the periodic arrival patterns to the same " \
+                                    "size of the arrival pattern distributions, each value represents the " \
+                                    "probability of sampling from the corresponding distribution."
+        self.periodic_pattern_dist = np.array(periodic_pattern_dist)
+        self.periodic_pattern_dist_weight = np.array(periodic_pattern_dist_weight)
+        assert np.all(self.periodic_pattern_dist >= 0), "Please set every arrival pattern distribution to non-negative " \
+                                                        "values."
+        assert np.all(np.any(self.periodic_pattern_dist > 0, axis=1)), "Please set at least one probability of every " \
+                                                                       "pattern distribution to a positive value."
+        self.periodic_pattern_dist /= np.sum(self.periodic_pattern_dist, axis=1)[np.newaxis, :]
+        assert np.all(self.periodic_pattern_dist_weight >= 0), "Please set the sampling weights of arrival pattern " \
+                                                               "distribution to non-negative values."
+        assert np.any(self.periodic_pattern_dist_weight > 0), "Please set at least one sampling weight of arrival " \
+                                                              "patterns to a positive value."
+        self.periodic_pattern_dist_weight /= np.sum(periodic_pattern_dist_weight)
         valid_awake = awake_dist in ["exponential", "constant"]
         assert valid_awake, "Please choose an awake duration distribution between 'exponential' and 'constant'."
         self.awake_dist = awake_dist
@@ -72,8 +84,8 @@ class NetworkSimulator:
         if not passive_tb:
             assert shaping_mode == "is", "The shaping mode must be ingress shaping (is) to support shapers with " \
                                          "proactively granted extra tokens."
+            assert tb_average_wait_time > 0, "Please set a positive average wait time to grant extra tokens."
         self.passive_tb = passive_tb
-        assert tb_average_wait_time > 0, "Please set a positive average wait time to grant extra tokens."
         self.tb_average_wait_time = tb_average_wait_time
         self.keep_per_hop_departure = keep_per_hop_departure
         self.repeat = repeat
@@ -444,22 +456,32 @@ class NetworkSimulator:
                 flow_awake.append(-1)
                 flow_traffic_burst.append(-1)
                 flow_sleep.append(0)
+            flow_current_pattern = np.array(flow_current_pattern)
             while True:
+                # Determine the arrival patterns at the next cycle.
+                flow_next_pattern = np.zeros_like(flow_current_pattern)
+                # Choose the pattern distribution at the next cycle.
+                next_pattern_idx = \
+                    np.random.choice(len(self.periodic_pattern_dist_weight), 1, p=self.periodic_pattern_dist_weight)[0]
+                next_pattern_dist = self.periodic_pattern_dist[next_pattern_idx]
+                # If the next arrival pattern is 'keep awake', the current pattern cannot be 'sleep'.
+                keep_awake_num = int(len(periodic_flow) * next_pattern_dist[2])
+                non_sleep_idx = np.arange(len(periodic_flow))[flow_current_pattern != 1]
+                keep_awake_idx = np.random.choice(non_sleep_idx, min(len(non_sleep_idx), keep_awake_num), replace=False)
+                flow_next_pattern[keep_awake_idx] = 2
+                # Next, randomly select a subset of flows to sleep in the next cycle.
+                sleep_prob = next_pattern_dist[1] / np.sum(next_pattern_dist[:2])
+                sleep_num = int((len(periodic_flow) - len(keep_awake_idx)) * sleep_prob)
+                non_keep_awake_idx = np.arange(len(periodic_flow))[flow_next_pattern != 2]
+                sleep_idx = np.random.choice(non_keep_awake_idx, sleep_num, replace=False)
+                flow_next_pattern[sleep_idx] = 1
                 for i in range(len(periodic_flow)):
                     flow_idx = periodic_flow[i]
                     flow_rate = self.token_bucket_profile[flow_idx, 0]
                     flow_burst = self.token_bucket_profile[flow_idx, 1]
                     period_end_idx = time_idx + 2 if time_idx + 2 < len(sync_arrival) else time_idx + 1
                     current_pattern = flow_current_pattern[i]
-                    if current_pattern != 1:
-                        # If the current pattern is not sleep, the next pattern can be any one of the three.
-                        next_pattern = np.random.choice(3, 1, p=self.periodic_pattern_weight)[0]
-                    else:
-                        # Otherwise, the next pattern must be either awake or sleep.
-                        next_pattern = np.random.choice(2, 1, p=self.periodic_pattern_weight[:2] / np.sum(
-                            self.periodic_pattern_weight[:2]))[0]
-                    # Update the flow arrival pattern.
-                    flow_current_pattern[i] = next_pattern
+                    next_pattern = flow_next_pattern[i]
                     if current_pattern == 1:
                         # Let the flow sleep through the current period.
                         flow_sleep[i] += sync_arrival[period_end_idx] - sync_arrival[time_idx]
@@ -505,6 +527,7 @@ class NetworkSimulator:
                 time_idx += 2
                 if time_idx >= len(sync_arrival) - 1:
                     break
+                flow_current_pattern = flow_next_pattern
         else:
             # Generate the (asynchronized) arrival pattern of each flow independently.
             for flow_idx in periodic_flow:
@@ -513,13 +536,17 @@ class NetworkSimulator:
                 time, traffic, token, sleep_overtime, awake_overtime = 0, 0, flow_token, 0, 0
                 current_pattern, traffic_burst = 0, -1
                 while True:
+                    # Choose the pattern distribution at the next cycle.
+                    next_pattern_idx = \
+                        np.random.choice(len(self.periodic_pattern_dist_weight), 1,
+                                         p=self.periodic_pattern_dist_weight)[0]
+                    next_pattern_dist = self.periodic_pattern_dist[next_pattern_idx]
                     if current_pattern != 1:
                         # If the current pattern is not sleep, the next pattern can be any one of the three.
-                        next_pattern = np.random.choice(3, 1, p=self.periodic_pattern_weight)[0]
+                        next_pattern = np.random.choice(3, 1, next_pattern_dist)[0]
                     else:
                         # Otherwise, the next pattern must be either awake or sleep.
-                        next_pattern = np.random.choice(2, 1, p=self.periodic_pattern_weight[:2] / np.sum(
-                            self.periodic_pattern_weight[:2]))[0]
+                        next_pattern = np.random.choice(2, 1, next_pattern_dist[:2] / np.sum(next_pattern_dist[:2]))[0]
                     # Compute the sleep and awake time for this period.
                     if self.sleep_dur in ["min", "max"]:
                         sleep_dur = (flow_token / flow_rate)
