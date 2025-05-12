@@ -1,4 +1,5 @@
-from bisect import bisect_left
+import copy
+import bisect
 import numpy as np
 
 
@@ -174,86 +175,112 @@ class PassiveExtraTokenBucket(ExtraTokenBucket):
         return
 
 
-class ProactiveExtraTokenBucket(PassiveExtraTokenBucket):
+class DeSyncExtraTokenBucket(PassiveExtraTokenBucket):
 
-    def __init__(self, rate, burst, original_tb, average_wait_time, packet_size, latency_target,
-                 transmission_delay, propagation_delay, component_idx=0, internal=False):
+    def __init__(self, rate, burst, latency_target, latency_min, backlog_window_size=0, num_uniform_samples=10,
+                 component_idx=0, internal=False):
         super().__init__(rate, burst, component_idx=component_idx, internal=internal)
-        self.original_tb = original_tb
-        assert average_wait_time > 0
-        self.average_wait_time = average_wait_time
-        self.packet_size = packet_size
         self.latency_target = latency_target
-        assert isinstance(transmission_delay, np.ndarray)
-        self.transmission_delay = transmission_delay
-        self.num_link = len(transmission_delay)
-        assert isinstance(propagation_delay, np.ndarray) and np.size(propagation_delay) == self.num_link
-        self.propagation_delay = propagation_delay
-        self.scheduler_backlog = np.zeros_like(transmission_delay)
-        self.extra_waiting = False
-        self.extra_eligible = False
-        self.wait_time = 0
+        self.latency_min = latency_min
+        self.backlog_window_size = backlog_window_size
+        self.num_uniform_samples = num_uniform_samples
+        self.average_wait_time_multiplier = 10
+        self.extra_token_prob = 0
+        self.waiting = False
+        self.event_number = 0
+        self.backlog_times = []
+        self.backlog_samples = {}
+        self.last_backlog = 0
+        self.last_compressed_backlog = 0
         return
 
     def arrive(self, time, packet_number, component_idx, is_internal):
+        backlog_old = len(self.backlog)
         super().arrive(time, packet_number, component_idx, is_internal)
-        if self.evaluate_feasibility(time) and not self.extra_waiting:
-            self.extra_waiting = True
-            self.extra_eligible = True
-            self.wait_time = np.random.exponential(self.average_wait_time)
-        else:
-            self.extra_eligible = False
+        # Keep track of status change in shaper backlog.
+        if backlog_old != len(self.backlog):
+            if time not in self.backlog_samples.keys():
+                self.backlog_times.append(time)
+            self.backlog_samples[time] = len(self.backlog)
         return self.idle
 
-    def evaluate_feasibility(self, time):
-        if len(self.backlog) == 0:
+    def forward(self, time, packet_number, component_idx, is_conformant):
+        backlog_old = len(self.backlog)
+        next_depart, next_idx, next_number, idle, forwarded_idx, forwarded_number, next_component = super().forward(
+            time, packet_number, component_idx, is_conformant)
+        # Reject scheduled extra tokens if the backlog is cleared before the tokens are granted.
+        if len(self.backlog) == 0 and self.waiting:
+            self.waiting = False
+            self.event_number += 1
+        # Keep track of status change in shaper backlog.
+        if backlog_old != len(self.backlog):
+            if time not in self.backlog_samples.keys():
+                self.backlog_times.append(time)
+            self.backlog_samples[time] = len(self.backlog)
+        return next_depart, next_idx, next_number, idle, forwarded_idx, forwarded_number, next_component
+
+    def schedule_extra_tokens(self):
+        schedule_seed = np.random.rand()
+        schedule_thresh = min(self.latency_min / self.latency_target * self.extra_token_prob, 1.0)
+        if len(self.backlog) == 0 or self.waiting or schedule_seed >= schedule_thresh:
+            return 0, -1
+        else:
+            average_wait_time = self.latency_target * self.average_wait_time_multiplier
+            assert average_wait_time >= 0
+            wait_time = 0 if average_wait_time == 0 else np.random.exponential(average_wait_time)
+            self.waiting = True
+            return self.event_number, wait_time
+
+    def get_extra_tokens(self, time, event_number):
+        if event_number != self.event_number:
             return False
-        shaping_delay = np.array([time - pkt[0] for pkt in self.backlog])
-        assert np.all(shaping_delay >= 0)
-        # Check the remaining burst from the original token bucket profile.
-        remaining_burst = int(self.original_tb.peek(time))
-        packet_arrival_time = np.zeros((len(self.backlog) + remaining_burst,), dtype=float)
-        for link_idx in range(len(self.transmission_delay)):
-            # Compute the transmission time of each packet assuming the scheduler is Processor Sharing (PS) and the
-            # link utilization remains unchanged. Set available bandwidth to be at least 1% to avoid infinite
-            # transmission time.
-            # link_available_bandwidth = max(1 - self.scheduler_utilization[link_idx], 0.01)
-            # link_transmission_delay = self.transmission_delay[link_idx] / link_available_bandwidth
-            link_transmission_delay = self.transmission_delay[link_idx]
-            # Compute the departure time of the previous packet assuming the scheduler backlog remains unchanged
-            # upon the arrival of the first packet.
-            prev_departure = packet_arrival_time[0] + link_transmission_delay * self.scheduler_backlog[link_idx]
-            for packet_idx in range(len(packet_arrival_time)):
-                # Compute the departure time of the packet.
-                packet_arrival = packet_arrival_time[packet_idx]
-                packet_departure = max(packet_arrival, prev_departure) + self.packet_size * link_transmission_delay
-                prev_departure = packet_departure
-                packet_departure += self.propagation_delay[link_idx]
-                packet_arrival_time[packet_idx] = packet_departure
-        packet_arrival_time[:len(shaping_delay)] += shaping_delay
-        worst_end_to_end_delay = np.amax(packet_arrival_time)
-        return worst_end_to_end_delay <= self.latency_target
-
-    def update_state(self, scheduler_backlog):
-        assert isinstance(scheduler_backlog, np.ndarray) and np.size(scheduler_backlog) == self.num_link
-        assert np.all(0 <= scheduler_backlog)
-        self.scheduler_backlog = scheduler_backlog
-        return
-
-    def clear_backlog(self, time):
         # Grant extra tokens to clear shaper backlog.
         self.reset_token(time)
         extra_token_num = len(self.backlog)
         self.add_token(time, extra_token_num)
-        self.extra_waiting = False
-        return
+        self.waiting = False
+        self.event_number += 1
+        return extra_token_num > 0
+
+    def peek_backlog_samples(self, time):
+        assert len(self.backlog_times) == 0 or self.backlog_times[-1] < time
+        # Compress backlog records through uniform sampling.
+        compressed_backlog = []
+        start_idx = 0
+        sample_window_size = self.backlog_window_size / self.num_uniform_samples
+        for sample_idx, sample_time in enumerate(np.linspace(time - self.backlog_window_size, time,
+                                                             num=self.num_uniform_samples, endpoint=False)):
+            end_idx = bisect.bisect_left(self.backlog_times, sample_time + sample_window_size)
+            # Keep the maximum backlog size observed within the sampling window.
+            max_backlog = -1
+            for time_idx in range(start_idx, end_idx):
+                backlog_time = self.backlog_times[time_idx]
+                backlog_value = self.backlog_samples[backlog_time]
+                max_backlog = max(max_backlog, backlog_value)
+                self.last_backlog = backlog_value
+            start_idx = end_idx
+            # Use the last backlog sample if no sample is available within the sampling window.
+            if max_backlog == -1:
+                max_backlog = self.last_backlog
+            # Record a backlog update if state changes.
+            if max_backlog != self.last_compressed_backlog:
+                self.last_compressed_backlog = max_backlog
+                compressed_backlog.append((sample_idx, max_backlog))
+        # Remove recorded backlog samples.
+        self.backlog_times = []
+        self.backlog_samples = {}
+        return compressed_backlog
 
     def reset(self):
         super().reset()
-        self.scheduler_backlog = np.zeros_like(self.transmission_delay)
-        self.extra_waiting = False
-        self.extra_eligible = False
-        self.wait_time = 0
+        self.average_wait_time_multiplier = 10
+        self.extra_token_prob = 0
+        self.waiting = False
+        self.event_number = 0
+        self.backlog_times = []
+        self.backlog_samples = {}
+        self.last_backlog = 0
+        self.last_compressed_backlog = 0
         return
 
 
@@ -311,7 +338,7 @@ class TokenBucketFluid:
     def peek(self, time):
         assert time >= 0, "Should check token number at time >= 0."
         # Check the token number.
-        peek_idx = bisect_left(self.token_count[0], time)
+        peek_idx = bisect.bisect_left(self.token_count[0], time)
         if peek_idx < len(self.token_count[0]) and self.token_count[0][peek_idx] == time:
             return self.token_count[1][peek_idx]
         time_left = self.token_count[0][peek_idx - 1]

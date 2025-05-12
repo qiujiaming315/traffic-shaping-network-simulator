@@ -88,7 +88,7 @@ class Scheduler(NetworkComponent):
         backlog_flow = [packet.flow_idx for packet in self.backlog]
         return np.sum(self.packet_size[backlog_flow])
 
-    def peek_utlization(self, time):
+    def peek_utilization(self, time):
         # Return the link utilization over the last busy period window.
         # Discard busy periods that end before the last window starts.
         window_idx = bisect.bisect(self.busy_period, time - self.busy_period_window_size)
@@ -101,12 +101,12 @@ class Scheduler(NetworkComponent):
             busy_period_length += time - self.busy_period[-1]
         for idx in range(len(self.busy_period) // 2):
             busy_period_length += self.busy_period[2 * idx + 1] - self.busy_period[2 * idx]
-        # Compute the utlization.
+        # Compute the utilization.
         utilization = busy_period_length / self.busy_period_window_size
         return utilization
 
     def peek(self, time):
-        return self.peek_backlog(time), self.peek_utlization(time)
+        return self.peek_backlog(time), self.peek_utilization(time)
 
     def update_recent_max_backlog(self, time):
         # Remove outdated backlog observations.

@@ -1,251 +1,278 @@
+import bisect
 import copy
 import heapq
 import numpy as np
+import gymnasium as gym
 
 from lib.network_simulator import NetworkSimulator, Event, EventType
 
 
-class RLNetworkEnv:
-    """A network environment for RL sampling similar to a openai.gym environment."""
+class RLNetworkEnv(gym.Env):
+    """A network environment for RL sampling following the Gym's API. Currently only support FIFO with ingress
+    shaping using DeSyncExtraTokenBucket shapers."""
 
-    def __init__(self, flow_profile, flow_path, reprofiling_delay, simulation_time=1000, scheduling_policy="fifo",
-                 shaping_mode="is", buffer_bound="infinite", arrival_pattern_type="sync", sync_jitter=0,
-                 periodic_arrival_ratio=1.0, periodic_pattern_dist=((0.8, 0.1, 0.1),),
-                 periodic_pattern_dist_weight=(1.0,), awake_dur=0, awake_dist="constant", sleep_dur="max",
-                 sleep_dist="constant", arrival_pattern=None, passive_tb=False, tb_average_wait_time=0.5,
+    def __init__(self, flow_profile, flow_path, reprofiling_delay, simulation_time=1000, buffer_bound="infinite",
+                 arrival_pattern_type="sync", sync_jitter=(0,), sync_jitter_weight=(1.0,), periodic_arrival_ratio=1.0,
+                 periodic_pattern_dist=((0.8, 0.1, 0.1),), periodic_pattern_dist_weight=(1.0,), awake_dur=0,
+                 awake_dist="constant", sleep_dur="max", sleep_dist="constant", arrival_pattern=None,
                  keep_per_hop_departure=True, repeat=False, scaling_factor=1.0, packet_size=1,
-                 busy_period_window_size=0, max_backlog_window_size=0, propagation_delay=0, tor=0.003, pause_interval=1,
-                 action_mode="add_token", max_token_add=10, high_reward=1, low_reward=0.1, penalty=-10,
-                 reward_function_type="linear"):
+                 scheduler_busy_period_window_size=0, scheduler_max_backlog_window_size=0, propagation_delay=0,
+                 tor=0.003, shaper_backlog_window_size=1, shaper_backlog_top_k=10, shaper_num_uniform_samples=10,
+                 pause_interval=1, action_mode="time", action_type="discrete",
+                 discrete_actions=(0.0001, 0.01, 0.1, 0.3, 0.5, 1.0, 1.5, 2.0, 5.0), reward_weights=(0.6, 0.4),
+                 average_bounds=(0.0, 1.0), violation_bounds=(0.0, 1.0)):
+        scheduling_policy, shaping_mode, passive_tb = "fifo", "is", False
         self.simulator = NetworkSimulator(flow_profile, flow_path, reprofiling_delay, simulation_time=simulation_time,
                                           scheduling_policy=scheduling_policy, shaping_mode=shaping_mode,
                                           buffer_bound=buffer_bound, arrival_pattern_type=arrival_pattern_type,
-                                          sync_jitter=sync_jitter, periodic_arrival_ratio=periodic_arrival_ratio,
+                                          sync_jitter=sync_jitter, sync_jitter_weight=sync_jitter_weight,
+                                          periodic_arrival_ratio=periodic_arrival_ratio,
                                           periodic_pattern_dist=periodic_pattern_dist,
                                           periodic_pattern_dist_weight=periodic_pattern_dist_weight,
                                           awake_dur=awake_dur, awake_dist=awake_dist, sleep_dur=sleep_dur,
                                           sleep_dist=sleep_dist, arrival_pattern=arrival_pattern, passive_tb=passive_tb,
-                                          tb_average_wait_time=tb_average_wait_time,
                                           keep_per_hop_departure=keep_per_hop_departure, repeat=repeat,
                                           scaling_factor=scaling_factor, packet_size=packet_size,
-                                          busy_period_window_size=busy_period_window_size,
-                                          max_backlog_window_size=max_backlog_window_size,
+                                          scheduler_busy_period_window_size=scheduler_busy_period_window_size,
+                                          scheduler_max_backlog_window_size=scheduler_max_backlog_window_size,
                                           propagation_delay=propagation_delay, tor=tor)
-        if not passive_tb:
-            assert action_mode == "add_token", "The control mode must be 'add_token' to support shapers with " \
-                                               "proactively granted extra tokens."
-            assert shaping_mode == "is", "The shaping mode must be ingress shaping (is) to support shapers with " \
-                                         "proactively granted extra tokens."
-        self.passive_tb = passive_tb
         self.repeat = repeat
+        self.shaper_backlog_window_size = shaper_backlog_window_size
+        self.shaper_backlog_top_k = shaper_backlog_top_k
+        self.shaper_num_uniform_samples = shaper_num_uniform_samples
         self.pause_interval = pause_interval
-        valid_mode = action_mode in ["add_token", "on_off"]
-        assert valid_mode, "Please choose a control action mode between 'add_token' and 'on_off'."
+        valid_action_mode = action_mode in ["time", "prob"]
+        assert valid_action_mode, "Please choose an action mode between 'time' and 'prob'."
         self.action_mode = action_mode
-        self.max_token_add = max_token_add
-        self.high_reward = high_reward
-        self.low_reward = low_reward
-        self.penalty = penalty
-        valid_type = reward_function_type in ["linear", "quadratic"]
-        assert valid_type, "Please choose a reward function type between 'linear' and 'quadratic'."
-        self.reward_function_type = reward_function_type
+        valid_action_type = action_type in ["continuous", "discrete"]
+        assert valid_action_type, "Please choose an action type between 'continuous' and 'discrete'."
+        self.action_type = action_type
+        self.discrete_actions = np.array([])
+        if self.action_type == "discrete":
+            self.discrete_actions = np.array(discrete_actions)
+            assert len(self.discrete_actions) > 0 and np.all(self.discrete_actions > 0), "Please set the discrete " \
+                                                                                         "actions to positive values."
+        self.reward_weights = np.array(reward_weights)
+        assert len(reward_weights) == 2 and np.all(self.reward_weights >= 0), "Please set the weight of average " \
+                                                                              "delay and delay violation rate in " \
+                                                                              "computing reward to a non-negative " \
+                                                                              "value."
+        self.average_bounds = np.array(average_bounds)
+        assert len(average_bounds) == 2 and 0 <= average_bounds[0] \
+               <= average_bounds[1] <= 1, "Please set the lower and upper bounds of (normalized) average delay to " \
+                                          "values in [0, 1]."
+        self.violation_bounds = np.array(violation_bounds)
+        assert len(violation_bounds) == 2 and 0 <= violation_bounds[0] \
+               <= violation_bounds[1] <= 1, "Please set the lower and upper bounds of delay violation rate to values " \
+                                            "in [0, 1]."
+        self.num_flow = self.simulator.num_flow
         self.time = 0
-        self.num_agent = self.simulator.num_flow
-        # Add a summary event at each time interval to collect a snapshot of the network.
-        for time_step in np.arange(pause_interval, simulation_time + pause_interval, pause_interval):
-            event = Event(time_step, EventType.SUMMARY)
-            heapq.heappush(self.simulator.event_pool, event)
+        # Declare the observation and action space.
+        self.observation_space = gym.spaces.Dict({
+            "shaper_backlog_ratio_history": gym.spaces.Box(low=0.0, high=max(1.0, simulation_time),
+                                                           shape=(self.shaper_backlog_top_k, 2), dtype=float),
+            "token_ratio": gym.spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=float),
+            "scheduler_backlog": gym.spaces.Box(low=0, high=2 ** 63 - 2, shape=(self.simulator.num_link,), dtype=int),
+            "scheduler_max_backlog": gym.spaces.Box(low=0, high=2 ** 63 - 2, shape=(self.simulator.num_link,),
+                                                    dtype=int),
+            "scheduler_utilization": gym.spaces.Box(low=0.0, high=1.0, shape=(self.simulator.num_link,), dtype=float)
+        })
+        if self.action_type == "discrete":
+            self.action_space = gym.spaces.Discrete(len(self.discrete_actions))
+        else:
+            self.action_space = gym.spaces.Box(low=0.0, high=10.0, shape=(1,), dtype=float)
+        # Configure the shapers.
+        for flow_idx in range(self.simulator.num_flow):
+            for tb in self.simulator.ingress_reprofilers[flow_idx].token_buckets:
+                tb.backlog_window_size = self.pause_interval
+                tb.num_uniform_samples = self.shaper_num_uniform_samples
+                # Disable the unused control mode.
+                if self.action_mode == "time":
+                    tb.extra_token_prob = tb.latency_target / tb.latency_min + 1
+                else:
+                    tb.average_wait_time_multiplier = 0
+        # Keep track of the backlog state of flows.
+        self.shaper_backlog_state = np.zeros((self.shaper_num_uniform_samples, self.simulator.num_flow, 2), dtype=int)
+        self.shaper_backlog_ratio_peak_times = list()
+        self.shaper_backlog_ratio_peak = dict()
+        # Add the first summary event.
+        event = Event(pause_interval, EventType.SUMMARY)
+        heapq.heappush(self.simulator.event_pool, event)
         # Keep the initial event pool for restoration upon resetting if repeatable.
         self.event_pool_copy = None
         if self.repeat:
             self.event_pool_copy = copy.deepcopy(self.simulator.event_pool)
         return
 
-    def reward_function(self, normalized_delay):
-        # Compute the reward given an end-to-end delay
-        if normalized_delay != -1 and normalized_delay <= 1:
-            if self.reward_function_type == "linear":
-                reward = self.low_reward + (1 - normalized_delay) * (self.high_reward - self.low_reward)
-            else:
-                reward = self.low_reward + (1 - normalized_delay ** 2) * (self.high_reward - self.low_reward)
-        else:
-            reward = self.penalty
-        return reward
+    def reward_function(self, prev_packet_count_shaper, next_packet_count_shaper):
+        all_packets = True
+        # Check if there is at least one packet to compute reward.
+        if all([p == n for p, n in zip(prev_packet_count_shaper, next_packet_count_shaper)]):
+            return 1, all_packets
+        # Check if all packets of interest have arrived at the destination.
+        if not all([s <= t for s, t in zip(next_packet_count_shaper, self.simulator.packet_count_terminal)]):
+            all_packets = False
+            next_packet_count_shaper_truncated = [min(s, t) for s, t in
+                                                  zip(next_packet_count_shaper, self.simulator.packet_count_terminal)]
+            next_packet_count_shaper = copy.deepcopy(next_packet_count_shaper_truncated)
+        aggregate_normalized_delay = []
+        for flow_idx, (old_count, new_count) in enumerate(zip(prev_packet_count_shaper, next_packet_count_shaper)):
+            for packet_number in range(old_count, new_count):
+                packet_end_to_end = self.simulator.end_to_end_delay[flow_idx][packet_number]
+                if packet_end_to_end != -1:
+                    packet_end_to_end /= self.simulator.latency_target[flow_idx]
+                aggregate_normalized_delay.append(packet_end_to_end)
+        if len(aggregate_normalized_delay) == 0:
+            return 1, all_packets
+        aggregate_normalized_delay = np.array(aggregate_normalized_delay)
+        average_delay = np.mean(aggregate_normalized_delay)
+        violation_rate = np.sum(aggregate_normalized_delay > 1) / len(aggregate_normalized_delay)
+        # Clip the average delay and delay violation rate.
+        average_score = (self.average_bounds[1] - average_delay) / (self.average_bounds[1] - self.average_bounds[0])
+        average_score = max(min(average_score, 1), 0)
+        violation_score = (self.violation_bounds[1] - violation_rate) / (
+                self.violation_bounds[1] - self.violation_bounds[0])
+        violation_score = max(min(violation_score, 1), 0)
+        reward = self.reward_weights[0] * average_score + self.reward_weights[1] * violation_score
+        return reward, all_packets
+
+    def get_top_k_shaper_ratio_peak(self):
+        # Discard outdated records.
+        window_idx = bisect.bisect_left(self.shaper_backlog_ratio_peak_times,
+                                        self.time - self.shaper_backlog_window_size)
+        for time in self.shaper_backlog_ratio_peak_times[:window_idx]:
+            del self.shaper_backlog_ratio_peak[time]
+        self.shaper_backlog_ratio_peak_times = self.shaper_backlog_ratio_peak_times[window_idx:]
+        # Retrieve the recent k peak backlog ratio values.
+        top_records = [(self.time - record_time, self.shaper_backlog_ratio_peak[record_time]) for record_time in
+                       self.shaper_backlog_ratio_peak_times[-1:-self.shaper_backlog_top_k - 1:-1]]
+        # Zerp-padding if not enough history records are available.
+        for _ in range(self.shaper_backlog_top_k - len(top_records)):
+            top_records.append((0, 0))
+        return np.array(top_records)
+
+    def get_obs(self):
+        # Collect the history of ingress shaper backlog states.
+        for flow_idx in range(self.simulator.num_flow):
+            for tb_idx, tb in enumerate(self.simulator.ingress_reprofilers[flow_idx].token_buckets):
+                backlog_records = tb.peek_backlog_samples(self.time)
+                backlog_old = self.shaper_backlog_state[self.shaper_num_uniform_samples - 1, flow_idx, tb_idx]
+                record_idx = 0
+                for sample_idx in range(self.shaper_num_uniform_samples):
+                    if record_idx < len(backlog_records) and sample_idx == backlog_records[record_idx][0]:
+                        backlog_old = backlog_records[record_idx][1]
+                        record_idx += 1
+                    self.shaper_backlog_state[sample_idx, flow_idx, tb_idx] = backlog_old
+        # Restore the shaper backlog peak values.
+        sample_window_size = self.pause_interval / self.shaper_num_uniform_samples
+        for sample_idx in range(self.shaper_num_uniform_samples):
+            sample_time = sample_idx * sample_window_size + self.time - self.pause_interval
+            sample_backlog = np.amax(self.shaper_backlog_state[sample_idx], axis=1)
+            if not np.all(sample_backlog == 0):
+                self.shaper_backlog_ratio_peak_times.append(sample_time)
+                self.shaper_backlog_ratio_peak[sample_time] = np.sum(sample_backlog) / np.sum(
+                    self.simulator.token_bucket_profile[:, 1])
+        # Retrieve the top-k shaper backlog ratio peak values.
+        shaper_backlog_ratio_peak_top = self.get_top_k_shaper_ratio_peak()
+        # Compute the ratio of unused tokens.
+        unused_token_num, total_token_num = 0, 0
+        for flow_idx, tb in enumerate(self.simulator.token_buckets):
+            flow_packet_size = self.simulator.packet_size[flow_idx]
+            token_num = tb.peek(self.time)
+            unused_token_num += token_num * flow_packet_size
+            total_token_num += tb.burst * flow_packet_size
+        unused_token_ratio = unused_token_num / total_token_num
+        # Link scheduler backlog and utilization.
+        scheduler_backlog = [0] * self.simulator.num_link
+        scheduler_max_backlog = [0] * self.simulator.num_link
+        scheduler_utilization = [0] * self.simulator.num_link
+        for link_idx in range(self.simulator.num_link):
+            sb, su = self.simulator.schedulers[link_idx].peek(self.time)
+            max_backlog = self.simulator.schedulers[link_idx].peek_recent_max_backlog(self.time)
+            scheduler_backlog[link_idx] = sb
+            scheduler_max_backlog[link_idx] = max_backlog
+            scheduler_utilization[link_idx] = su
+        return {"shaper_backlog_ratio_history": shaper_backlog_ratio_peak_top, "token_ratio": unused_token_ratio,
+                "scheduler_backlog": scheduler_backlog, "scheduler_max_backlog": scheduler_max_backlog,
+                "scheduler_utilization": scheduler_utilization}
+
+    def get_info(self, all_packets=True):
+        return {"reward_on_all_packets": all_packets,
+                "packet_count_shaper": copy.deepcopy(self.simulator.packet_count_shaper)}
 
     def step(self, action):
-        states = [[] for _ in range(self.simulator.num_flow)]
-        end_to_end_delay = []
-        shaping_delay = []
 
-        def activate_reprofiler(reprofiler, a):
-            reprofiler.activate(a)
-            # Add a packet forward event if the shaper is turned off.
-            if not a:
-                for tb in reprofiler.token_buckets:
-                    if not tb.idle and tb.head_pointer < len(tb.backlog):
-                        tb_packet_number = tb.backlog[tb.head_pointer][1]
-                        event = Event(self.time, EventType.FORWARD, reprofiler.flow_idx, tb_packet_number, tb,
-                                      flag=False)
-                        heapq.heappush(self.simulator.event_pool, event)
-            return
-
-        def add_token_to_reprofiler(reprofiler, token_nums):
-            # Add token to each token bucket of the reprofiler.
-            for tb_idx, token_num in enumerate(token_nums):
-                # Remove unused extra token from the previous time step.
-                reprofiler.reset_token(self.time, tb_idx)
-                # Add extra token for this time step.
-                reprofiler.add_token(self.time, tb_idx, token_num)
-                # Add a packet forward event if the token bucket has at least one token.
-                tb = reprofiler.token_buckets[tb_idx]
-                if tb.token >= 1 and len(tb.backlog) > 0:
-                    tb_packet_number = tb.backlog[0][1]
-                    event = Event(self.time, EventType.FORWARD, reprofiler.flow_idx, tb_packet_number, tb, flag=True)
-                    heapq.heappush(self.simulator.event_pool, event)
-            return
-
+        # The control activation function.
         def update_wait_time(reprofiler, average_wait_time_multiplier):
             for tb_idx in range(len(reprofiler.token_buckets)):
                 tb = reprofiler.token_buckets[tb_idx]
-                tb.average_wait_time *= average_wait_time_multiplier
+                tb.average_wait_time_multiplier = average_wait_time_multiplier
             return
 
-        # Check the control action type and select the control function.
-        if self.action_mode == "add_token":
-            if self.passive_tb:
-                assert np.issubdtype(action.dtype, np.number)
-                action = np.minimum(action, self.max_token_add)
-                action_func = add_token_to_reprofiler
-            else:
-                assert isinstance(action, float)
-                action = np.ones((self.simulator.num_flow,), dtype=float) * action
-                action_func = update_wait_time
-        else:
-            assert action.dtype == np.bool_
-            action_func = activate_reprofiler
+        def update_extra_token_prob(reprofiler, extra_token_prob):
+            for tb_idx in range(len(reprofiler.token_buckets)):
+                tb = reprofiler.token_buckets[tb_idx]
+                tb.extra_token_prob = extra_token_prob
+            return
+
+        # Choose the activation function.
+        act_func = update_wait_time if self.action_mode == "time" else update_extra_token_prob
+        # Convert the action if needed.
+        if self.action_type == "discrete":
+            action = self.discrete_actions[action]
+        # Expand the global control action to all flows.
+        action = np.ones((self.simulator.num_flow,), dtype=float) * action
         # Enforce the reprofiling control actions.
-        if self.simulator.scheduling_policy == "fifo":
-            if self.simulator.shaping_mode in ["pfs", "ils", "is", "ntb"]:
-                for flow_idx, a in enumerate(action):
-                    action_func(self.simulator.ingress_reprofilers[flow_idx], a)
-                    if self.simulator.shaping_mode in ["pfs", "ntb"]:
-                        flow_links = self.simulator.flow_path[flow_idx]
-                        for link_idx in flow_links:
-                            action_func(self.simulator.reprofilers[(link_idx, flow_idx)], a)
-                    elif self.simulator.shaping_mode == "ils":
-                        flow_links = self.simulator.flow_path[flow_idx]
-                        for cur_link, next_link in zip(flow_links[:-1], flow_links[1:]):
-                            action_func(self.simulator.reprofilers[(cur_link, next_link)].multi_slope_shapers[flow_idx],
-                                        a)
+        for flow_idx, a in enumerate(action):
+            act_func(self.simulator.ingress_reprofilers[flow_idx], a)
+        prev_packet_count_shaper = copy.deepcopy(self.simulator.packet_count_shaper)
         self.time += self.pause_interval
         # Start the simulation.
-        packet_count_old = copy.deepcopy(self.simulator.packet_count)
         self.simulator.simulate()
-        # Collect the end-to-end delay experienced by packets that reached the destination during the pause interval.
-        for flow_idx, (old_count, new_count) in enumerate(zip(packet_count_old, self.simulator.packet_count)):
-            flow_end_to_end, flow_shaping = [], []
-            for packet_number in range(old_count, new_count):
-                packet_end_to_end = self.simulator.end_to_end_delay[flow_idx][packet_number]
-                packet_shaping = self.simulator.shaping_delay[flow_idx][packet_number]
-                if packet_end_to_end != -1:
-                    assert packet_shaping != -1
-                    packet_end_to_end /= self.simulator.latency_target[flow_idx]
-                    packet_shaping /= self.simulator.latency_target[flow_idx]
-                flow_end_to_end.append(packet_end_to_end)
-                flow_shaping.append(packet_shaping)
-            end_to_end_delay.append(flow_end_to_end)
-            shaping_delay.append(flow_shaping)
-        # Record the network status.
-        for state, tb, p in zip(states, self.simulator.token_buckets, self.simulator.packet_size):
-            token_num = tb.peek(self.time)
-            state.append(token_num * p)
-        if self.simulator.scheduling_policy == "fifo":
-            if self.simulator.shaping_mode in ["pfs", "ils", "is", "ntb"]:
-                reprofiler_num = 1 if self.simulator.shaping_mode == "is" else self.simulator.num_link + 1
-                reprofiler_backlog = [[0] * reprofiler_num for _ in range(self.simulator.num_flow)]
-                for flow_idx, flow_links in enumerate(self.simulator.flow_path):
-                    ingress_rb = self.simulator.ingress_reprofilers[flow_idx].peek(self.time)
-                    reprofiler_backlog[flow_idx][0] = ingress_rb * self.simulator.packet_size[flow_idx]
-                    if self.simulator.shaping_mode == "ils":
-                        for cur_link, next_link in zip(flow_links[:-1], flow_links[1:]):
-                            rb = self.simulator.reprofilers[(cur_link, next_link)].peek(self.time)
-                            reprofiler_backlog[flow_idx][next_link + 1] = rb
-                    elif self.simulator.shaping_mode in ["pfs", "ntb"]:
-                        for link_idx in flow_links:
-                            rb = self.simulator.reprofilers[(link_idx, flow_idx)].peek(self.time)
-                            reprofiler_backlog[flow_idx][link_idx + 1] = rb * self.simulator.packet_size[flow_idx]
-        scheduler_backlog = [[0] * self.simulator.num_link for _ in range(self.simulator.num_flow)]
-        scheduler_max_backlog = [[0] * self.simulator.num_link for _ in range(self.simulator.num_flow)]
-        scheduler_utilization = [[0] * self.simulator.num_link for _ in range(self.simulator.num_flow)]
-        for flow_idx, flow_links in enumerate(self.simulator.flow_path):
-            for link_idx in flow_links:
-                sb, su = self.simulator.schedulers[link_idx].peek(self.time)
-                max_backlog = self.simulator.schedulers[link_idx].peek_recent_max_backlog(self.time)
-                scheduler_backlog[flow_idx][link_idx] = sb
-                scheduler_max_backlog[flow_idx][link_idx] = max_backlog
-                scheduler_utilization[flow_idx][link_idx] = su
-        for flow_idx in range(self.simulator.num_flow):
-            state = states[flow_idx]
-            if self.simulator.scheduling_policy == "fifo":
-                if self.simulator.shaping_mode in ["pfs", "ils", "is", "ntb"]:
-                    rb = reprofiler_backlog[flow_idx]
-                    state.extend(rb)
-            sb = scheduler_backlog[flow_idx]
-            su = scheduler_utilization[flow_idx]
-            state.extend(sb)
-            state.extend(su)
-        # Update the shaper states.
-        if self.action_mode == "add_token" and not self.passive_tb:
-            for flow_idx, flow_links in enumerate(self.simulator.flow_path):
-                ingress_shaper = self.simulator.ingress_reprofilers[flow_idx]
-                for tb in ingress_shaper.token_buckets:
-                    tb.update_state(np.array(scheduler_max_backlog[flow_idx])[flow_links])
-        # Compute the reward based on the end-to-end latency and determine whether the episode terminates.
-        exceed_target = False
-        reward = 0
-        for end in end_to_end_delay:
-            if len(end) == 0:
-                flow_reward = 0
-            elif np.any([e == -1 or e > 1 for e in end]):
-                exceed_target = True
-                flow_reward = self.penalty
-            else:
-                flow_reward = self.reward_function(np.mean(end))
-            # flow_reward = 0 if len(end) == 0 else flow_reward / len(end)
-            reward += flow_reward
-        reward /= self.simulator.num_flow
-        terminate = len(self.simulator.event_pool) == 0
-        # if exceed_target:
-        #     reward = self.penalty
-        return states, reward, terminate, exceed_target, (end_to_end_delay, shaping_delay)
+        next_packet_count_shaper = copy.deepcopy(self.simulator.packet_count_shaper)
+        # Add the next summary event.
+        next_time = self.time + self.pause_interval
+        if next_time <= self.simulator.simulation_time:
+            event = Event(next_time, EventType.SUMMARY)
+            heapq.heappush(self.simulator.event_pool, event)
+        # Check the network status.
+        obs = self.get_obs()
+        # Compute the reward.
+        reward, all_packets = self.reward_function(prev_packet_count_shaper, next_packet_count_shaper)
+        # Check if the episode terminates.
+        terminated = len(self.simulator.event_pool) == 0
+        info = self.get_info(all_packets)
+        return obs, reward, terminated, info
 
-    def reset(self, arrival_pattern=None):
+    def reset(self, seed=None, options=None):
+        # Reset the random number generator.
+        super().reset(seed=seed)
+        # Reset the simulator.
+        arrival_pattern = None if options is None else options["arrival_pattern"]
         self.simulator.reset(arrival_pattern=arrival_pattern)
         self.time = 0
+        # Configure the shapers.
+        for flow_idx in range(self.simulator.num_flow):
+            for tb in self.simulator.ingress_reprofilers[flow_idx].token_buckets:
+                tb.backlog_window_size = self.pause_interval
+                tb.num_uniform_samples = self.shaper_num_uniform_samples
+                # Disable the unused control mode.
+                if self.action_mode == "time":
+                    tb.extra_token_prob = tb.latency_target / tb.latency_min + 1
+                else:
+                    tb.average_wait_time_multiplier = 0
+        # Keep track of the backlog state of flows.
+        self.shaper_backlog_state = np.zeros((self.shaper_num_uniform_samples, self.simulator.num_flow, 2), dtype=int)
+        self.shaper_backlog_ratio_peak_times = list()
+        self.shaper_backlog_ratio_peak = dict()
         # Restore the initial event pool if repeating the previous episode.
         if self.repeat and arrival_pattern is None:
             self.simulator.event_pool = copy.deepcopy(self.event_pool_copy)
         else:
-            # Add a summary event at each time interval to collect a snapshot of the network.
-            for time_step in np.arange(self.pause_interval, self.simulator.simulation_time + self.pause_interval,
-                                       self.pause_interval):
-                event = Event(time_step, EventType.SUMMARY)
-                heapq.heappush(self.simulator.event_pool, event)
+            # Add the first summary event.
+            event = Event(self.pause_interval, EventType.SUMMARY)
+            heapq.heappush(self.simulator.event_pool, event)
         # Set the initial state.
-        if self.simulator.scheduling_policy == "fifo":
-            if self.simulator.shaping_mode in ["pfs", "ils", "ntb"]:
-                # Token num, ingress shaper backlog, per-hop shaper backlog, per-hop scheduler backlog and utilization
-                state_size = 3 * self.simulator.num_link + 2
-            elif self.simulator.shaping_mode == "is":
-                # Token num, ingress shaper backlog, per-hop scheduler backlog and utilization
-                state_size = 2 * self.simulator.num_link + 2
-            elif self.simulator.shaping_mode == "itb":
-                # Token num, per-hop scheduler backlog and utilization
-                state_size = 2 * self.simulator.num_link + 1
-        elif self.simulator.scheduling_policy == "sced":
-            # Token num, per-hop scheduler backlog and utilization
-            state_size = 2 * self.simulator.num_link + 1
-        states = [[0] * state_size for _ in range(self.simulator.num_flow)]
-        for state, f, p in zip(states, self.simulator.token_bucket_profile, self.simulator.packet_size):
-            state[0] = f[1] * p
-        return states
+        initial_obs = self.get_obs()
+        info = self.get_info()
+        return initial_obs, info

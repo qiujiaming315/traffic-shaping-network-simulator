@@ -27,8 +27,11 @@ def getargs():
                       help="Link buffer bound. Choose between 'infinite', and 'with_shaping'.")
     args.add_argument('--arrival-pattern-type', type=str, default="sync",
                       help="Type of traffic arrival pattern. Choose between 'sync' and 'async'.")
-    args.add_argument('--sync-jitter', type=float, default=0,
-                      help="Jitter for synchronized flow burst. Only active when the arrival pattern is 'sync_burst'.")
+    args.add_argument('--sync-jitter', type=float, default=[0.0], nargs='+',
+                      help="A sequence of jitter for synchronized flow burst. Only active when the arrival pattern is "
+                           "'sync'.")
+    args.add_argument('--sync-jitter-weight', type=float, default=[1.0], nargs='+',
+                      help="The sampling weight of the synchronization jitters.")
     args.add_argument('--periodic-arrival-ratio', type=float, default=1.0,
                       help="Percent of flows that have periodic arrival patterns. Non-periodic flows send the maximum"
                            "amount of traffic throughout the simulation.")
@@ -64,13 +67,14 @@ if __name__ == '__main__':
     simulator = NetworkSimulator(flow_profile, flow_route, shaping_delay, simulation_time=args.simulation_time,
                                  scheduling_policy=args.scheduling_policy, shaping_mode=args.shaping_mode,
                                  buffer_bound=args.buffer_bound, arrival_pattern_type=args.arrival_pattern_type,
-                                 sync_jitter=args.sync_jitter, periodic_arrival_ratio=args.periodic_arrival_ratio,
+                                 sync_jitter=tuple(args.sync_jitter), sync_jitter_weight=tuple(args.sync_jitter_weight),
+                                 periodic_arrival_ratio=args.periodic_arrival_ratio,
                                  periodic_pattern_dist=np.array(args.periodic_pattern_dist).reshape(-1, 3),
                                  periodic_pattern_dist_weight=tuple(args.periodic_pattern_dist_weight),
                                  awake_dur=args.awake_dur, awake_dist=args.awake_dist, sleep_dur=args.sleep_dur,
                                  sleep_dist=args.sleep_dist, arrival_pattern=None, passive_tb=True,
                                  keep_per_hop_departure=False, repeat=False, scaling_factor=1.0, packet_size=1,
-                                 busy_period_window_size=0, max_backlog_window_size=0, propagation_delay=0)
+                                 scheduler_busy_period_window_size=0, scheduler_max_backlog_window_size=0, propagation_delay=0)
     # Start the simulation.
     start = time.time()
     simulator.simulate()
