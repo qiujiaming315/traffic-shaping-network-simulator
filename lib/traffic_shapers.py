@@ -177,13 +177,18 @@ class PassiveExtraTokenBucket(ExtraTokenBucket):
 
 class DeSyncExtraTokenBucket(PassiveExtraTokenBucket):
 
-    def __init__(self, rate, burst, latency_target, latency_min, backlog_window_size=0, num_uniform_samples=10,
+    def __init__(self, rate, burst, latency_target, latency_min, flow_token_rate, backlog_window_size=0,
+                 num_uniform_samples=10, max_num_inter_arrival=20, local_protection_on=True, local_protection_time=10.0,
                  component_idx=0, internal=False):
         super().__init__(rate, burst, component_idx=component_idx, internal=internal)
         self.latency_target = latency_target
         self.latency_min = latency_min
+        self.flow_token_rate = flow_token_rate
         self.backlog_window_size = backlog_window_size
         self.num_uniform_samples = num_uniform_samples
+        self.max_num_inter_arrival = max_num_inter_arrival
+        self.local_protection_on = local_protection_on
+        self.local_protection_time = local_protection_time
         self.average_wait_time_multiplier = 10
         self.extra_token_prob = 0
         self.waiting = False
@@ -192,6 +197,9 @@ class DeSyncExtraTokenBucket(PassiveExtraTokenBucket):
         self.backlog_samples = {}
         self.last_backlog = 0
         self.last_compressed_backlog = 0
+        self.burst_inter_arrival_records = np.array([])
+        self.last_burst_arrival = None
+        self.local_protection_until = 0
         return
 
     def arrive(self, time, packet_number, component_idx, is_internal):
@@ -202,6 +210,19 @@ class DeSyncExtraTokenBucket(PassiveExtraTokenBucket):
             if time not in self.backlog_samples.keys():
                 self.backlog_times.append(time)
             self.backlog_samples[time] = len(self.backlog)
+        # Compute burst inter-arrival times.
+        if self.last_burst_arrival is None:
+            self.last_burst_arrival = time
+            self.local_protection_until = time + self.local_protection_time
+        else:
+            # If inter-arrival time is smaller than the token generation time, considered as the same burst.
+            inter_arrival = time - self.last_burst_arrival
+            if inter_arrival >= 1 / self.flow_token_rate:
+                self.last_burst_arrival = time
+                normal_record = self.check_inter_arrival_record(inter_arrival)
+                if not normal_record:
+                    self.local_protection_until = time + self.local_protection_time
+                self.add_inter_arrival_record(inter_arrival)
         return self.idle
 
     def forward(self, time, packet_number, component_idx, is_conformant):
@@ -219,15 +240,17 @@ class DeSyncExtraTokenBucket(PassiveExtraTokenBucket):
             self.backlog_samples[time] = len(self.backlog)
         return next_depart, next_idx, next_number, idle, forwarded_idx, forwarded_number, next_component
 
-    def schedule_extra_tokens(self):
+    def schedule_extra_tokens(self, time):
         schedule_seed = np.random.rand()
         schedule_thresh = min(self.latency_min / self.latency_target * self.extra_token_prob, 1.0)
-        if len(self.backlog) == 0 or self.waiting or schedule_seed >= schedule_thresh:
+        if len(self.backlog) == 0 or self.waiting or (
+                self.local_protection_on and time <= self.local_protection_until) or schedule_seed >= schedule_thresh:
             return 0, -1
         else:
             average_wait_time = self.latency_target * self.average_wait_time_multiplier
             assert average_wait_time >= 0
-            wait_time = 0 if average_wait_time == 0 else np.random.exponential(average_wait_time)
+            # wait_time = 0 if average_wait_time == 0 else np.random.exponential(average_wait_time)
+            wait_time = 0 if average_wait_time == 0 else np.random.uniform(low=0.0, high=2 * average_wait_time)
             self.waiting = True
             return self.event_number, wait_time
 
@@ -271,6 +294,28 @@ class DeSyncExtraTokenBucket(PassiveExtraTokenBucket):
         self.backlog_samples = {}
         return compressed_backlog
 
+    def check_inter_arrival_record(self, inter_arrival):
+        # Remove inter-arrival records that are considered outliers using the 3-sigma rule.
+        if len(self.burst_inter_arrival_records) >= self.max_num_inter_arrival:
+            while True:
+                avg, std = np.mean(self.burst_inter_arrival_records), np.std(self.burst_inter_arrival_records)
+                not_outlier = np.abs(avg - self.burst_inter_arrival_records) <= 3 * std
+                self.burst_inter_arrival_records = self.burst_inter_arrival_records[not_outlier]
+                if np.all(not_outlier):
+                    break
+        # Enforce local protection if not enough records have been collected.
+        if len(self.burst_inter_arrival_records) < self.max_num_inter_arrival:
+            return False
+        avg, std = np.mean(self.burst_inter_arrival_records), np.std(self.burst_inter_arrival_records)
+        # Use the 3-sigma rule to check if the new inter-arrival time record comes from the same distribution.
+        return np.abs(avg - inter_arrival) <= 3 * std
+
+    def add_inter_arrival_record(self, inter_arrival):
+        num_delete = max(len(self.burst_inter_arrival_records) - self.max_num_inter_arrival + 1, 0)
+        self.burst_inter_arrival_records = self.burst_inter_arrival_records[num_delete:]
+        self.burst_inter_arrival_records = np.append(self.burst_inter_arrival_records, inter_arrival)
+        return
+
     def reset(self):
         super().reset()
         self.average_wait_time_multiplier = 10
@@ -281,6 +326,8 @@ class DeSyncExtraTokenBucket(PassiveExtraTokenBucket):
         self.backlog_samples = {}
         self.last_backlog = 0
         self.last_compressed_backlog = 0
+        self.last_burst_arrival = None
+        self.local_protection_until = 0
         return
 
 

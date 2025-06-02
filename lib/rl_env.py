@@ -12,34 +12,35 @@ class RLNetworkEnv(gym.Env):
     shaping using DeSyncExtraTokenBucket shapers."""
 
     def __init__(self, flow_profile, flow_path, reprofiling_delay, simulation_time=1000, buffer_bound="infinite",
-                 arrival_pattern_type="sync", sync_jitter=(0,), sync_jitter_weight=(1.0,), periodic_arrival_ratio=1.0,
-                 periodic_pattern_dist=((0.8, 0.1, 0.1),), periodic_pattern_dist_weight=(1.0,), awake_dur=0,
-                 awake_dist="constant", sleep_dur="max", sleep_dist="constant", arrival_pattern=None,
-                 keep_per_hop_departure=True, repeat=False, scaling_factor=1.0, packet_size=1,
-                 scheduler_busy_period_window_size=0, scheduler_max_backlog_window_size=0, propagation_delay=0,
-                 tor=0.003, shaper_backlog_window_size=1, shaper_backlog_top_k=10, shaper_num_uniform_samples=10,
-                 pause_interval=1, action_mode="time", action_type="discrete",
+                 traffic_cycle_period=5.0, clock_drift_std=0.01, load_perturbation=(0.05, 0.005),
+                 reboot_inter_arrival_avg=200.0, reboot_time_avg=5.0, arrival_pattern=None,
+                 keep_per_hop_departure=True, repeat=False, scaling_factor=1.0, packet_size=1, propagation_delay=0,
+                 tor=0.003, shaper_backlog_window_size=50.0, shaper_backlog_top_k=6, shaper_num_uniform_samples=10,
+                 shaper_max_num_inter_arrival=20, shaper_local_protection_on=True, shaper_local_protection_time=10.0,
+                 scheduler_busy_period_window_size=0, scheduler_max_backlog_window_size=0, pause_interval=1,
+                 action_mode="time", action_type="discrete",
                  discrete_actions=(0.0001, 0.01, 0.1, 0.3, 0.5, 1.0, 1.5, 2.0, 5.0), reward_weights=(0.6, 0.4),
-                 average_bounds=(0.0, 1.0), violation_bounds=(0.0, 1.0)):
+                 average_bounds=(0.0, 1.0), violation_bounds=(0.0, 1.0), seed=None):
         scheduling_policy, shaping_mode, passive_tb = "fifo", "is", False
         self.simulator = NetworkSimulator(flow_profile, flow_path, reprofiling_delay, simulation_time=simulation_time,
                                           scheduling_policy=scheduling_policy, shaping_mode=shaping_mode,
-                                          buffer_bound=buffer_bound, arrival_pattern_type=arrival_pattern_type,
-                                          sync_jitter=sync_jitter, sync_jitter_weight=sync_jitter_weight,
-                                          periodic_arrival_ratio=periodic_arrival_ratio,
-                                          periodic_pattern_dist=periodic_pattern_dist,
-                                          periodic_pattern_dist_weight=periodic_pattern_dist_weight,
-                                          awake_dur=awake_dur, awake_dist=awake_dist, sleep_dur=sleep_dur,
-                                          sleep_dist=sleep_dist, arrival_pattern=arrival_pattern, passive_tb=passive_tb,
+                                          buffer_bound=buffer_bound, traffic_cycle_period=traffic_cycle_period,
+                                          clock_drift_std=clock_drift_std, load_perturbation=load_perturbation,
+                                          reboot_inter_arrival_avg=reboot_inter_arrival_avg,
+                                          reboot_time_avg=reboot_time_avg,
+                                          arrival_pattern=arrival_pattern, passive_tb=passive_tb,
                                           keep_per_hop_departure=keep_per_hop_departure, repeat=repeat,
                                           scaling_factor=scaling_factor, packet_size=packet_size,
-                                          scheduler_busy_period_window_size=scheduler_busy_period_window_size,
-                                          scheduler_max_backlog_window_size=scheduler_max_backlog_window_size,
-                                          propagation_delay=propagation_delay, tor=tor)
+                                          propagation_delay=propagation_delay, tor=tor, seed=seed)
         self.repeat = repeat
         self.shaper_backlog_window_size = shaper_backlog_window_size
         self.shaper_backlog_top_k = shaper_backlog_top_k
         self.shaper_num_uniform_samples = shaper_num_uniform_samples
+        self.shaper_max_num_inter_arrival = shaper_max_num_inter_arrival
+        self.shaper_local_protection_on = shaper_local_protection_on
+        self.shaper_local_protection_time = shaper_local_protection_time
+        self.scheduler_busy_period_window_size = scheduler_busy_period_window_size
+        self.scheduler_max_backlog_window_size = scheduler_max_backlog_window_size
         self.pause_interval = pause_interval
         valid_action_mode = action_mode in ["time", "prob"]
         assert valid_action_mode, "Please choose an action mode between 'time' and 'prob'."
@@ -86,11 +87,19 @@ class RLNetworkEnv(gym.Env):
             for tb in self.simulator.ingress_reprofilers[flow_idx].token_buckets:
                 tb.backlog_window_size = self.pause_interval
                 tb.num_uniform_samples = self.shaper_num_uniform_samples
+                tb.max_num_inter_arrival = self.shaper_max_num_inter_arrival
+                tb.local_protection_on = self.shaper_local_protection_on
+                tb.local_protection_time = self.shaper_local_protection_time
                 # Disable the unused control mode.
                 if self.action_mode == "time":
                     tb.extra_token_prob = tb.latency_target / tb.latency_min + 1
                 else:
                     tb.average_wait_time_multiplier = 0
+        # Configure the schedulers.
+        for link_idx in range(self.simulator.num_link):
+            link = self.simulator.schedulers[link_idx]
+            link.busy_period_window_size = self.scheduler_busy_period_window_size
+            link.max_backlog_window_size = self.scheduler_max_backlog_window_size
         # Keep track of the backlog state of flows.
         self.shaper_backlog_state = np.zeros((self.shaper_num_uniform_samples, self.simulator.num_flow, 2), dtype=int)
         self.shaper_backlog_ratio_peak_times = list()
@@ -249,18 +258,26 @@ class RLNetworkEnv(gym.Env):
         super().reset(seed=seed)
         # Reset the simulator.
         arrival_pattern = None if options is None else options["arrival_pattern"]
-        self.simulator.reset(arrival_pattern=arrival_pattern)
+        self.simulator.reset(seed=seed, arrival_pattern=arrival_pattern)
         self.time = 0
         # Configure the shapers.
         for flow_idx in range(self.simulator.num_flow):
             for tb in self.simulator.ingress_reprofilers[flow_idx].token_buckets:
                 tb.backlog_window_size = self.pause_interval
                 tb.num_uniform_samples = self.shaper_num_uniform_samples
+                tb.max_num_inter_arrival = self.shaper_max_num_inter_arrival
+                tb.local_protection_on = self.shaper_local_protection_on
+                tb.local_protection_time = self.shaper_local_protection_time
                 # Disable the unused control mode.
                 if self.action_mode == "time":
                     tb.extra_token_prob = tb.latency_target / tb.latency_min + 1
                 else:
                     tb.average_wait_time_multiplier = 0
+        # Configure the schedulers.
+        for link_idx in range(self.simulator.num_link):
+            link = self.simulator.schedulers[link_idx]
+            link.busy_period_window_size = self.scheduler_busy_period_window_size
+            link.max_backlog_window_size = self.scheduler_max_backlog_window_size
         # Keep track of the backlog state of flows.
         self.shaper_backlog_state = np.zeros((self.shaper_num_uniform_samples, self.simulator.num_flow, 2), dtype=int)
         self.shaper_backlog_ratio_peak_times = list()

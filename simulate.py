@@ -25,24 +25,15 @@ def getargs():
                            "and 'none'. Only active when scheduling policy is 'fifo'")
     args.add_argument('--buffer-bound', type=str, default='infinite',
                       help="Link buffer bound. Choose between 'infinite', and 'with_shaping'.")
-    args.add_argument('--arrival-pattern-type', type=str, default="sync",
-                      help="Type of traffic arrival pattern. Choose between 'sync' and 'async'.")
-    args.add_argument('--sync-jitter', type=float, default=[0.0], nargs='+',
-                      help="A sequence of jitter for synchronized flow burst. Only active when the arrival pattern is "
-                           "'sync'.")
-    args.add_argument('--sync-jitter-weight', type=float, default=[1.0], nargs='+',
-                      help="The sampling weight of the synchronization jitters.")
-    args.add_argument('--periodic-arrival-ratio', type=float, default=1.0,
-                      help="Percent of flows that have periodic arrival patterns. Non-periodic flows send the maximum"
-                           "amount of traffic throughout the simulation.")
-    args.add_argument('--periodic-pattern-dist', type=float, default=[0.8, 0.1, 0.1], nargs='+',
-                      help="A sequence of 3-element distributions, each representing the probability of selecting "
-                           "'awake', 'sleep', or 'keep awake' as the periodic pattern, respectively.")
-    args.add_argument('--periodic-pattern-dist-weight', type=float, default=[1.0], nargs='+',
-                      help="The sampling weight of the arrival pattern distributions.")
-    args.add_argument('--awake-dur', type=float, default=0.0, help="Length of awake time of periodic flows.")
-    args.add_argument('--awake-dist', type=str, default="constant",
-                      help="Periodic flow awake time distribution. Choose between 'exponential' and 'constant'.")
+    args.add_argument('--traffic-cycle-period', type=float, default=5.0, help="Length of traffic bursting cycle.")
+    args.add_argument('--clock-drift-std', type=float, default=0.01,
+                      help="The standard deviation of the normal distribution for clock drift of traffic sources.")
+    args.add_argument('--load-perturbation', type=float, default=[0.05, 0.005], nargs='+',
+                      help="The average and standard deviation of the normal distribution for load perturbation.")
+    args.add_argument('--reboot-inter-arrival-avg', type=float, default=200.0,
+                      help="The average inter-arrival time of system reboot events.")
+    args.add_argument('--reboot-time-avg', type=float, default=5.0,
+                      help="The average time of a system reboot.")
     args.add_argument('--sleep-dur', type=str, default='max', help="Length of sleep time of periodic flows. Can be set"
                                                                    "to 'min', 'max', or a number.")
     args.add_argument('--sleep-dist', type=str, default="constant",
@@ -66,15 +57,13 @@ if __name__ == '__main__':
     # Establish the simulator. Make your own choice of the input parameters.
     simulator = NetworkSimulator(flow_profile, flow_route, shaping_delay, simulation_time=args.simulation_time,
                                  scheduling_policy=args.scheduling_policy, shaping_mode=args.shaping_mode,
-                                 buffer_bound=args.buffer_bound, arrival_pattern_type=args.arrival_pattern_type,
-                                 sync_jitter=tuple(args.sync_jitter), sync_jitter_weight=tuple(args.sync_jitter_weight),
-                                 periodic_arrival_ratio=args.periodic_arrival_ratio,
-                                 periodic_pattern_dist=np.array(args.periodic_pattern_dist).reshape(-1, 3),
-                                 periodic_pattern_dist_weight=tuple(args.periodic_pattern_dist_weight),
-                                 awake_dur=args.awake_dur, awake_dist=args.awake_dist, sleep_dur=args.sleep_dur,
-                                 sleep_dist=args.sleep_dist, arrival_pattern=None, passive_tb=True,
+                                 buffer_bound=args.buffer_bound, traffic_cycle_period=args.traffic_cycle_period,
+                                 clock_drift_std=args.clock_drift_std, load_perturbation=tuple(args.load_perturbation),
+                                 reboot_inter_arrival_avg=args.reboot_inter_arrival_avg,
+                                 reboot_time_avg=args.reboot_time_avg, arrival_pattern=None, passive_tb=True,
                                  keep_per_hop_departure=False, repeat=False, scaling_factor=1.0, packet_size=1,
-                                 scheduler_busy_period_window_size=0, scheduler_max_backlog_window_size=0, propagation_delay=0)
+                                 scheduler_busy_period_window_size=0, scheduler_max_backlog_window_size=0,
+                                 propagation_delay=0)
     # Start the simulation.
     start = time.time()
     simulator.simulate()
