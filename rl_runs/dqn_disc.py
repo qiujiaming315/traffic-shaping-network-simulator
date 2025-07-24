@@ -1,12 +1,13 @@
 import argparse
 import datetime
 import os
+from pathlib import Path
 import pprint
 
 import numpy as np
 import torch
 from network import DQN
-from wrapper import make_env
+from wrapper import make_env, make_eval_env
 
 from tianshou.data import Collector, VectorReplayBuffer
 from tianshou.highlevel.logger import LoggerFactoryDefault
@@ -30,14 +31,15 @@ def get_args() -> argparse.Namespace:
     parser.add_argument('--reboot-inter-arrival-avg', type=float, default=200.0,
                         help="The average inter-arrival time of system reboot events.")
     parser.add_argument('--reboot-time-avg', type=float, default=5.0, help="The average time of a system reboot.")
+    parser.add_argument('--packet-size', type=float, default=1.0, help="The size of each packet.")
     parser.add_argument('--shaper-backlog-window-size', type=float, default=50.0,
                         help="The sliding window size (in seconds) to collect shaper backlog records.")
     parser.add_argument('--shaper-backlog-top-k', type=int, default=6,
                         help="The number of recent top backlog records to embed in the observations.")
     parser.add_argument('--shaper-num-uniform-samples', type=int, default=10,
                         help="The granularity of uniform sampling of backlog records in local data collection.")
-    parser.add_argument('--shaper-max-num-inter-arrival', type=int, default=20,
-                        help="The size of local backlog record buffer (for TAAD).")
+    parser.add_argument('--shaper-min-num-inter-arrival', type=int, default=20,
+                        help="The minimum number of burst inter-arrival records to keep at each flow (for TAAD).")
     parser.add_argument('--pause-interval', type=float, default=1,
                         help="The length of a time step (in second) for the reinforcement learning environment.")
     parser.add_argument('--action-mode', type=str, default="time",
@@ -52,6 +54,7 @@ def get_args() -> argparse.Namespace:
                         help="The lower and upper bounds of delay violation rate.")
     # Parameters for the RL model.
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--same-seed", action='store_true')
     parser.add_argument("--eps-test", type=float, default=0.005)
     parser.add_argument("--eps-train", type=float, default=1.0)
     parser.add_argument("--eps-train-final", type=float, default=0.05)
@@ -69,6 +72,7 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--training-num", type=int, default=10)
     parser.add_argument("--test-num", type=int, default=10)
     parser.add_argument("--logdir", type=str, default="log")
+    parser.add_argument("--log-name", type=str, default="")
     parser.add_argument(
         "--device",
         type=str,
@@ -76,12 +80,29 @@ def get_args() -> argparse.Namespace:
     )
     parser.add_argument("--resume-path", type=str, default=None)
     parser.add_argument("--resume-id", type=str, default=None)
+    parser.add_argument("--do-train", action='store_true')
+    parser.add_argument("--do-evaluate", action='store_true')
+    parser.add_argument("--enable-taad", action='store_true')
     return parser.parse_args()
 
 
-def main(args: argparse.Namespace = get_args()) -> None:
-    env, train_envs, test_envs = make_env(args)
-    args.state_shape = env.observation_space.shape or env.observation_space.n
+def test_dqn(args=get_args()):
+    # log
+    now = datetime.datetime.now().strftime("%y%m%d-%H%M%S")
+    args.algo_name = "dqn_disc"
+    if args.log_name == "":
+        args.log_name = os.path.join(args.algo_name, str(args.seed), now)
+    log_path = os.path.join(args.logdir, args.log_name)
+    Path(log_path).mkdir(parents=True, exist_ok=True)
+    stats_path = os.path.join(log_path, "stats")
+    Path(stats_path).mkdir(parents=True, exist_ok=True)
+    trail_paths = [os.path.join(stats_path, str(t)) for t in range(args.test_num)]
+    for trail_path in trail_paths:
+        Path(trail_path).mkdir(parents=True, exist_ok=True)
+    # prepare the environments for training and test
+    env, train_envs, test_envs = make_env(args, stats_path, same_seed=args.same_seed)
+    args.state_shape = int(np.prod(env.observation_space["shaper_backlog_ratio_history"].shape)) + int(
+        np.prod(env.observation_space["token_ratio"].shape))
     args.action_shape = env.action_space.shape or env.action_space.n
     # should be N_FRAMES x H x W
     print("Observations shape:", args.state_shape)
@@ -118,28 +139,11 @@ def main(args: argparse.Namespace = get_args()) -> None:
     train_collector = Collector(policy, train_envs, buffer, exploration_noise=True)
     test_collector = Collector(policy, test_envs, exploration_noise=True)
 
-    # log
-    now = datetime.datetime.now().strftime("%y%m%d-%H%M%S")
-    args.algo_name = "dqn"
-    log_name = os.path.join(args.algo_name, str(args.seed), now)
-    log_path = os.path.join(args.logdir, log_name)
-
-    # logger
-    logger_factory = LoggerFactoryDefault()
-    logger_factory.logger_type = "tensorboard"
-
-    logger = logger_factory.create_logger(
-        log_dir=log_path,
-        experiment_name=log_name,
-        run_id=args.resume_id,
-        config_dict=vars(args),
-    )
-
     def save_best_fn(policy: BasePolicy) -> None:
         torch.save(policy.state_dict(), os.path.join(log_path, "policy.pth"))
 
     def stop_fn(mean_rewards: float) -> bool:
-        if env.spec.reward_threshold:
+        if env.spec and env.spec.reward_threshold:
             return mean_rewards >= env.spec.reward_threshold
         return False
 
@@ -150,8 +154,8 @@ def main(args: argparse.Namespace = get_args()) -> None:
         else:
             eps = args.eps_train_final
         policy.set_eps(eps)
-        if env_step % 10 == 0:
-            logger.write("train/env_step", env_step, {"train/eps": eps})
+        # if env_step % 10 == 0:
+        #     logger.write("train/env_step", env_step, {"train/eps": eps})
 
     def test_fn(epoch: int, env_step: int | None) -> None:
         policy.set_eps(args.eps_test)
@@ -162,32 +166,52 @@ def main(args: argparse.Namespace = get_args()) -> None:
         torch.save({"model": policy.state_dict()}, ckpt_path)
         return ckpt_path
 
-    # test train_collector and start filling replay buffer
-    train_collector.reset()
-    train_collector.collect(n_step=args.batch_size * args.training_num)
-    # trainer
-    result = OffpolicyTrainer(
-        policy=policy,
-        train_collector=train_collector,
-        test_collector=test_collector,
-        max_epoch=args.epoch,
-        step_per_epoch=args.step_per_epoch,
-        step_per_collect=args.step_per_collect,
-        episode_per_test=args.test_num,
-        batch_size=args.batch_size,
-        train_fn=train_fn,
-        test_fn=test_fn,
-        stop_fn=stop_fn,
-        save_best_fn=save_best_fn,
-        logger=logger,
-        update_per_step=args.update_per_step,
-        test_in_train=False,
-        resume_from_log=args.resume_id is not None,
-        save_checkpoint_fn=save_checkpoint_fn,
-    ).run()
+    if args.do_train:
+        # logger
+        logger_factory = LoggerFactoryDefault()
+        logger_factory.logger_type = "tensorboard"
 
-    pprint.pprint(result)
+        logger = logger_factory.create_logger(
+            log_dir=log_path,
+            experiment_name=args.log_name,
+            run_id=args.resume_id,
+            config_dict=vars(args),
+        )
+        # test train_collector and start filling replay buffer
+        train_collector.reset()
+        train_collector.collect(n_step=args.batch_size * args.training_num)
+        # trainer
+        result = OffpolicyTrainer(
+            policy=policy,
+            train_collector=train_collector,
+            test_collector=test_collector,
+            max_epoch=args.epoch,
+            step_per_epoch=args.step_per_epoch,
+            step_per_collect=args.step_per_collect,
+            episode_per_test=args.test_num,
+            batch_size=args.batch_size,
+            train_fn=train_fn,
+            test_fn=test_fn,
+            stop_fn=stop_fn,
+            save_best_fn=save_best_fn,
+            logger=logger,
+            update_per_step=args.update_per_step,
+            test_in_train=False,
+            resume_from_log=args.resume_id is not None,
+            save_checkpoint_fn=save_checkpoint_fn,
+        ).run()
+        pprint.pprint(result)
+
+    if args.do_evaluate:
+        model_path = os.path.join(log_path, "policy.pth")
+        # Make sure the saved model weights exist.
+        assert os.path.isfile(model_path), "Please ensure the pre-trained model exists before evaluation."
+        policy.load_state_dict(torch.load(model_path, map_location=args.device))
+        eval_envs = make_eval_env(args, stats_path, enable_taad=args.enable_taad, same_seed=args.same_seed)
+        eval_collector = Collector(policy, eval_envs)
+        collect_result = eval_collector.collect(reset_before_collect=True, n_episode=args.test_num)
+        collect_result.pprint_asdict()
 
 
 if __name__ == "__main__":
-    main(get_args())
+    test_dqn(get_args())

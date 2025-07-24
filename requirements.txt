@@ -1,6 +1,7 @@
 gymnasium==0.28.1
-matplotlib==3.8.4
-numpy==2.2.5
-scipy==1.15.2
+matplotlib==3.9.1
+numpy==1.26.4
+opencv_python==4.11.0.86
+scipy==1.14.0
 tianshou==1.1.0
 torch==2.2.2

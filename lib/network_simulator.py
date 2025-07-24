@@ -445,7 +445,11 @@ class NetworkSimulator:
                 awake_dur = max((traffic_new - flow_traffic_burst) / flow_rate, 0)
                 period_duration = (self.traffic_cycle_period + clock_drifts[flow_idx]) * (
                         flow_cycle[flow_idx] + 1) + flow_last_reboot - flow_start_time
-                if awake_dur > period_duration:
+                awake_ub = period_duration
+                if next_reboot_idx < len(reboot_events):
+                    time_to_reboot = reboot_events[next_reboot_idx] - flow_start_time
+                    awake_ub = min(awake_ub, time_to_reboot)
+                if awake_dur > awake_ub:
                     # If the awake duration is too large, round down the cumulative traffic instead.
                     traffic_new -= 1
                     awake_dur = max((traffic_new - flow_traffic_burst) / flow_rate, 0)
