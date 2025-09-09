@@ -1,6 +1,5 @@
 import copy
 import heapq
-import numbers
 import numpy as np
 from collections import defaultdict
 from collections.abc import Iterable
@@ -18,8 +17,9 @@ class NetworkSimulator:
     def __init__(self, flow_profile, flow_path, reprofiling_delay, simulation_time=1000, scheduling_policy="fifo",
                  shaping_mode="pfs", buffer_bound="infinite", traffic_cycle_period=5.0, clock_drift_std=0.01,
                  load_perturbation=(0.05, 0.005), reboot_inter_arrival_avg=200.0, reboot_time_avg=5.0,
-                 arrival_pattern=None, passive_tb=True, keep_per_hop_departure=True, repeat=False, scaling_factor=1.0,
-                 packet_size=1, propagation_delay=0, tor=0.003, seed=None):
+                 arrival_pattern=None, passive_tb=True, keep_per_hop_departure=True, repeat=False,
+                 fill_tb_inter_arrival=True, scaling_factor=1.0, packet_size=1, propagation_delay=0, tor=0.003,
+                 seed=None):
         flow_profile = np.array(flow_profile)
         flow_path = np.array(flow_path)
         reprofiling_delay = np.array(reprofiling_delay)
@@ -60,6 +60,7 @@ class NetworkSimulator:
         self.passive_tb = passive_tb
         self.keep_per_hop_departure = keep_per_hop_departure
         self.repeat = repeat
+        self.fill_tb_inter_arrival = fill_tb_inter_arrival
         self.scaling_factor = scaling_factor
         if isinstance(packet_size, Iterable):
             assert len(packet_size) == self.num_flow, "Please set the packet size either as a single value, " \
@@ -78,6 +79,8 @@ class NetworkSimulator:
         # Compute the token bucket profile of each flow using 1 packet size as the unit.
         self.token_bucket_profile = self.flow_profile[:, :2] / self.packet_size[:, np.newaxis]
         self.token_bucket_profile[:, 1] += 1
+        self.flow_clock_drift = np.zeros((self.num_flow,), dtype=float)
+        self.reboot_times = np.array([], dtype=float)
         self.arrival_pattern = self.generate_arrival_pattern() if arrival_pattern is None else arrival_pattern
         # Configure the network components.
         reprofiling_rate = flow_profile[:, 1] / reprofiling_delay
@@ -224,6 +227,17 @@ class NetworkSimulator:
                 self.ingress_reprofiler_max_backlog = [0] * len(self.ingress_reprofilers)
             if shaping_mode in ["pfs", "ils", "ntb"]:
                 self.reprofiler_max_backlog = [0] * len(self.reprofilers)
+        # Fill the token bucket inter arrival record buffer.
+        if not self.passive_tb and self.fill_tb_inter_arrival:
+            for rp, flow_drift in zip(self.ingress_reprofilers, self.flow_clock_drift):
+                for tb in rp.token_buckets:
+                    flow_load_perturbation = self.rng.normal(loc=self.load_perturbation[0],
+                                                             scale=self.load_perturbation[1])
+                    # Add some noise to avoid too restrictive anomaly check.
+                    noise = self.rng.normal(loc=0, scale=self.traffic_cycle_period / 10000,
+                                            size=(tb.max_num_inter_arrival,))
+                    tb.burst_inter_arrival_records = np.array(
+                        [self.traffic_cycle_period + flow_drift + flow_load_perturbation + n for n in noise])
         self.event_pool = []
         # Add packet arrival events to the event pool.
         self.arrival_time = []
@@ -377,6 +391,7 @@ class NetworkSimulator:
         # print(f"{sleep_bottleneck_max:.3f}")
         # Randomly set the clock drift of each traffic source.
         clock_drifts = self.rng.normal(loc=0, scale=self.clock_drift_std, size=(self.num_flow,))
+        self.flow_clock_drift = clock_drifts
         # Randomly set system reboot events.
         reboot_events, last_reboot = [], 0
         while last_reboot < self.simulation_time:
@@ -392,6 +407,7 @@ class NetworkSimulator:
                 while reboot_events[reboot_idx] + reboot_time >= reboot_events[reboot_idx + 1]:
                     reboot_time = self.rng.exponential(self.reboot_time_avg)
             reboot_times.append(reboot_time)
+        self.reboot_times = np.array(reboot_events, dtype=float) + np.array(reboot_times, dtype=float)
         # Initiate the traffic arrival states of the flows.
         flow_traffic, flow_token, flow_last_start, flow_cycle, flow_reboot = [], [], [], [], []
         for flow_idx in range(self.num_flow):
@@ -471,6 +487,8 @@ class NetworkSimulator:
         if arrival_pattern is not None:
             self.arrival_pattern = arrival_pattern
         elif not self.repeat:
+            self.flow_clock_drift = np.zeros((self.num_flow,), dtype=float)
+            self.reboot_times = np.array([], dtype=float)
             self.arrival_pattern = self.generate_arrival_pattern()
         for scheduler in self.schedulers:
             scheduler.reset()
@@ -489,6 +507,17 @@ class NetworkSimulator:
                 self.ingress_reprofiler_max_backlog = [0] * len(self.ingress_reprofilers)
             if self.shaping_mode in ["pfs", "ils", "ntb"]:
                 self.reprofiler_max_backlog = [0] * len(self.reprofilers)
+        # Fill the token bucket inter arrival record buffer.
+        if not self.passive_tb and self.fill_tb_inter_arrival:
+            for rp, flow_drift in zip(self.ingress_reprofilers, self.flow_clock_drift):
+                for tb in rp.token_buckets:
+                    flow_load_perturbation = self.rng.normal(loc=self.load_perturbation[0],
+                                                             scale=self.load_perturbation[1])
+                    # Add some noise to avoid too restrictive anomaly check.
+                    noise = self.rng.normal(loc=0, scale=self.traffic_cycle_period / 10000,
+                                            size=(tb.max_num_inter_arrival,))
+                    tb.burst_inter_arrival_records = np.array(
+                        [self.traffic_cycle_period + flow_drift + flow_load_perturbation + n for n in noise])
         self.event_pool = []
         # Restore the initial event pool if repeating the previous simulation.
         if self.repeat and arrival_pattern is None:

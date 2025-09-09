@@ -33,7 +33,8 @@ def plot_delay_statistics(x_data, y_data, labels, output_path, fig_name, y_err=N
     num_line = len(y_values)
     # colors = ["#7FB3D5", "#F7CAC9", "#A2C8B5", "#D9AFD9", "#D3D3D3", "#FFFF99", "#FFD1DC", "#9AD1D4", "#B19CD9",
     #           "#B0AFAF"]
-    colors = ["#F7CAC9", "#D3D3D3"]
+    # colors = ["#F7CAC9", "#D3D3D3"]
+    colors = ["#D3D3D3"]
     assert len(colors) >= num_line, "Too many lines to visualize."
     if y_err is None:
         for y_value, color, label in zip(y_values, colors, labels):
@@ -44,8 +45,8 @@ def plot_delay_statistics(x_data, y_data, labels, output_path, fig_name, y_err=N
                         ecolor=color, elinewidth=5, capsize=9, capthick=5)
     if use_inset:
         # inset Axes....
-        # x1, x2, y1, y2 = 0.065, 0.095, -0.1, 0.1  # subregion of the original image
-        x1, x2, y1, y2 = 0.0035, 0.0065, -0.1, 0.1  # subregion of the original image
+        x1, x2, y1, y2 = 0.065, 0.095, -0.1, 0.1  # subregion of the original image
+        # x1, x2, y1, y2 = 0.0035, 0.0065, -0.1, 0.1  # subregion of the original image
         axins = ax.inset_axes([0.4, 0.3, 0.3, 0.25], xlim=(x1, x2), ylim=(y1, y2), xticklabels=[], yticklabels=[])
         axins.tick_params(axis='x', labelsize=20)
         axins.tick_params(axis='y', labelsize=20)

@@ -177,8 +177,8 @@ class PassiveExtraTokenBucket(ExtraTokenBucket):
 class DeSyncExtraTokenBucket(PassiveExtraTokenBucket):
 
     def __init__(self, rate, burst, latency_target, latency_min, flow_token_rate, backlog_window_size=0,
-                 num_uniform_samples=10, min_num_inter_arrival_collect=20, local_protection_on=True,
-                 local_protection_time=10.0, component_idx=0, internal=False):
+                 num_uniform_samples=10, min_num_inter_arrival_collect=20, inter_arrival_noise_std=0.0001,
+                 local_protection_on=True, local_protection_time=10.0, component_idx=0, internal=False):
         super().__init__(rate, burst, component_idx=component_idx, internal=internal)
         self.latency_target = latency_target
         self.latency_min = latency_min
@@ -187,6 +187,7 @@ class DeSyncExtraTokenBucket(PassiveExtraTokenBucket):
         self.num_uniform_samples = num_uniform_samples
         self.min_num_inter_arrival_collect = min_num_inter_arrival_collect
         self.max_num_inter_arrival = min_num_inter_arrival_collect + 5
+        self.inter_arrival_noise_std = inter_arrival_noise_std
         self.local_protection_on = local_protection_on
         self.local_protection_time = local_protection_time
         self.average_wait_time_multiplier = 10
@@ -198,6 +199,7 @@ class DeSyncExtraTokenBucket(PassiveExtraTokenBucket):
         self.burst_inter_arrival_records = np.array([])
         self.last_burst_arrival = None
         self.local_protection_until = 0
+        self.local_protection_periods = []
         return
 
     def arrive(self, time, packet_number, component_idx, is_internal):
@@ -207,6 +209,7 @@ class DeSyncExtraTokenBucket(PassiveExtraTokenBucket):
         if self.last_burst_arrival is None:
             self.last_burst_arrival = time
             self.local_protection_until = time + self.local_protection_time
+            self.add_local_protection_period((time, self.local_protection_until))
         else:
             # If inter-arrival time is smaller than the token generation time, considered as the same burst.
             inter_arrival = time - self.last_burst_arrival
@@ -215,6 +218,7 @@ class DeSyncExtraTokenBucket(PassiveExtraTokenBucket):
                 normal_record = self.check_inter_arrival_record(inter_arrival)
                 if not normal_record:
                     self.local_protection_until = time + self.local_protection_time
+                    self.add_local_protection_period((time, self.local_protection_until))
                 self.add_inter_arrival_record(inter_arrival)
         # Keep track of status change in shaper backlog.
         if backlog_old != len(self.backlog):
@@ -315,7 +319,20 @@ class DeSyncExtraTokenBucket(PassiveExtraTokenBucket):
         # Remove redundant inter-arrival records.
         num_delete = max(len(self.burst_inter_arrival_records) - self.max_num_inter_arrival + 1, 0)
         self.burst_inter_arrival_records = self.burst_inter_arrival_records[num_delete:]
-        self.burst_inter_arrival_records = np.append(self.burst_inter_arrival_records, inter_arrival)
+        # add a random noise to the inter-arrival record to avoid overly restrictive anomaly checking.
+        noise = np.random.normal(loc=0, scale=self.inter_arrival_noise_std)
+        self.burst_inter_arrival_records = np.append(self.burst_inter_arrival_records, inter_arrival + noise)
+        return
+
+    def add_local_protection_period(self, period):
+        if len(self.local_protection_periods) > 0:
+            # Check if the new period overlaps with the existing one.
+            last_period = self.local_protection_periods.pop()
+            if last_period[1] >= period[0]:
+                period = (last_period[0], period[1])
+            else:
+                self.local_protection_periods.append(last_period)
+        self.local_protection_periods.append(period)
         return
 
     def reset(self):
@@ -328,6 +345,7 @@ class DeSyncExtraTokenBucket(PassiveExtraTokenBucket):
         self.backlog_samples = {}
         self.last_burst_arrival = None
         self.local_protection_until = 0
+        self.local_protection_periods = []
         return
 
 

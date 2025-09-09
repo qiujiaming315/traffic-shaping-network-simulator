@@ -16,14 +16,14 @@ class RLNetworkEnv(gym.Env):
     def __init__(self, flow_profile, flow_path, reprofiling_delay, simulation_time=1000, buffer_bound="infinite",
                  traffic_cycle_period=5.0, clock_drift_std=0.01, load_perturbation=(0.05, 0.005),
                  reboot_inter_arrival_avg=200.0, reboot_time_avg=5.0, arrival_pattern=None,
-                 keep_per_hop_departure=True, repeat=False, scaling_factor=1.0, packet_size=1, propagation_delay=0,
-                 tor=0.003, shaper_backlog_window_size=50.0, shaper_backlog_top_k=6, shaper_num_uniform_samples=10,
-                 shaper_min_num_inter_arrival=20, shaper_local_protection_on=True, shaper_local_protection_time=10.0,
-                 scheduler_busy_period_window_size=0, scheduler_max_backlog_window_size=0, pause_interval=1,
-                 verbose_obs=True, action_mode="time", action_type="discrete",
-                 discrete_actions=(0.0001, 0.01, 0.1, 0.3, 0.5, 1.0, 1.5, 2.0, 5.0), reward_weights=(0.6, 0.4),
-                 average_bounds=(0.0, 1.0), violation_bounds=(0.0, 1.0), log_path="", save_inter_arrival=False,
-                 save_delay_stats=False, save_action=False, seed=None):
+                 keep_per_hop_departure=True, repeat=False, fill_tb_inter_arrival=True, scaling_factor=1.0,
+                 packet_size=1, propagation_delay=0, tor=0.003, shaper_backlog_window_size=50.0, shaper_backlog_top_k=6,
+                 shaper_num_uniform_samples=10, shaper_min_num_inter_arrival=20, shaper_local_protection_on=True,
+                 shaper_local_protection_time=10.0, scheduler_busy_period_window_size=0,
+                 scheduler_max_backlog_window_size=0, pause_interval=1, verbose_obs=True, action_mode="time",
+                 action_type="discrete", discrete_actions=(0.0001, 0.01, 0.1, 0.3, 0.5, 1.0, 1.5, 2.0, 5.0),
+                 reward_weights=(0.6, 0.4), average_bounds=(0.0, 1.0), violation_bounds=(0.0, 1.0), log_path="",
+                 save_delay_stats=False, save_action=False, save_reward=False, seed=None):
         scheduling_policy, shaping_mode, passive_tb = "fifo", "is", False
         self.simulator = NetworkSimulator(flow_profile, flow_path, reprofiling_delay, simulation_time=simulation_time,
                                           scheduling_policy=scheduling_policy, shaping_mode=shaping_mode,
@@ -33,13 +33,15 @@ class RLNetworkEnv(gym.Env):
                                           reboot_time_avg=reboot_time_avg,
                                           arrival_pattern=arrival_pattern, passive_tb=passive_tb,
                                           keep_per_hop_departure=keep_per_hop_departure, repeat=repeat,
-                                          scaling_factor=scaling_factor, packet_size=packet_size,
-                                          propagation_delay=propagation_delay, tor=tor, seed=seed)
+                                          fill_tb_inter_arrival=fill_tb_inter_arrival, scaling_factor=scaling_factor,
+                                          packet_size=packet_size, propagation_delay=propagation_delay, tor=tor,
+                                          seed=seed)
         self.repeat = repeat
         self.shaper_backlog_window_size = shaper_backlog_window_size
         self.shaper_backlog_top_k = shaper_backlog_top_k
         self.shaper_num_uniform_samples = shaper_num_uniform_samples
         self.shaper_min_num_inter_arrival = shaper_min_num_inter_arrival
+        self.shaper_inter_arrival_noise_std = traffic_cycle_period / 10000
         self.shaper_local_protection_on = shaper_local_protection_on
         self.shaper_local_protection_time = shaper_local_protection_time
         self.scheduler_busy_period_window_size = scheduler_busy_period_window_size
@@ -71,10 +73,11 @@ class RLNetworkEnv(gym.Env):
                <= violation_bounds[1] <= 1, "Please set the lower and upper bounds of delay violation rate to values " \
                                             "in [0, 1]."
         self.log_path = log_path
-        self.save_inter_arrival = save_inter_arrival
         self.save_delay_stats = save_delay_stats
         self.save_action = save_action
-        if any([save_inter_arrival, save_delay_stats, save_action]):
+        self.save_reward = save_reward
+        self.seed = seed
+        if any([save_delay_stats, save_action, save_reward]):
             assert log_path != "", "Please specify a path to save the collected statistics."
         self.num_flow = self.simulator.num_flow
         self.time = 0
@@ -104,6 +107,7 @@ class RLNetworkEnv(gym.Env):
                 tb.backlog_window_size = self.pause_interval
                 tb.num_uniform_samples = self.shaper_num_uniform_samples
                 tb.min_num_inter_arrival_collect = self.shaper_min_num_inter_arrival
+                tb.inter_arrival_noise_std = self.shaper_inter_arrival_noise_std
                 tb.local_protection_on = self.shaper_local_protection_on
                 tb.local_protection_time = self.shaper_local_protection_time
                 # Disable the unused control mode.
@@ -122,6 +126,11 @@ class RLNetworkEnv(gym.Env):
         self.shaper_backlog_ratio_peak = dict()
         # Keep track of the actions taken by the agent.
         self.action_history = []
+        # Keep track of the reward received by the agent.
+        self.reward_history = []
+        # TODO: remove these later
+        self.reward_avg = []
+        self.reward_worst = []
         # Add the first summary event.
         event = Event(pause_interval, EventType.SUMMARY)
         heapq.heappush(self.simulator.event_pool, event)
@@ -161,6 +170,10 @@ class RLNetworkEnv(gym.Env):
                 self.violation_bounds[1] - self.violation_bounds[0])
         violation_score = max(min(violation_score, 1), 0)
         reward = self.reward_weights[0] * average_score + self.reward_weights[1] * violation_score
+        # TODO: remove these later
+        if self.save_reward:
+            self.reward_avg.append(average_delay)
+            self.reward_worst.append(violation_rate)
         return reward, all_packets
 
     def get_top_k_shaper_ratio_peak(self):
@@ -233,23 +246,17 @@ class RLNetworkEnv(gym.Env):
         return {"reward_on_all_packets": all_packets,
                 "packet_count_shaper": copy.deepcopy(self.simulator.packet_count_shaper)}
 
-    def save_inter_arrival_helper(self):
-        # Save the inter-arrival records from the simulator.
-        file_name = os.path.join(self.log_path, "inter_arrival_records.pickle")
-        if not os.path.isfile(file_name):
-            inter_arrival_records = []
-            for rp in self.simulator.ingress_reprofilers:
-                tb_records = []
-                for tb in rp.token_buckets:
-                    tb_records.append(tb.burst_inter_arrival_records)
-                inter_arrival_records.append(tb_records)
-            with open(file_name, 'wb') as f:
-                pickle.dump(inter_arrival_records, f, protocol=pickle.HIGHEST_PROTOCOL)
-        return
-
-    def save_delay_stats_helper(self):
+    def save_delay_stats_helper(self, save_multi_copy=True):
         # Save the delay statistics from the simulator.
-        file_name = os.path.join(self.log_path, f"delay_stats.pickle")
+        if save_multi_copy:
+            # Count the number of saved files.
+            file_count = 0
+            for filename in os.listdir(self.log_path):
+                if filename.startswith("delay_stats"):
+                    file_count += 1
+            file_name = os.path.join(self.log_path, f"delay_stats_{file_count}.pickle")
+        else:
+            file_name = os.path.join(self.log_path, "delay_stats.pickle")
         if not os.path.isfile(file_name):
             normalized_end_to_end = [[e / flow_target for e in flow_end_to_end if e != -1] for
                                      flow_end_to_end, flow_target in
@@ -271,8 +278,30 @@ class RLNetworkEnv(gym.Env):
         # Save the action history.
         file_name = os.path.join(self.log_path, f"action.pickle")
         if not os.path.isfile(file_name):
+            local_protection_periods = []
+            for rp in self.simulator.ingress_reprofilers:
+                tb_records = []
+                for tb in rp.token_buckets:
+                    tb_records.append(tb.local_protection_periods)
+                local_protection_periods.append(tb_records)
+            action_data = {"action_history": self.action_history, "local_protection_periods": local_protection_periods,
+                           "system_reboot_times": self.simulator.reboot_times}
             with open(file_name, 'wb') as f:
-                pickle.dump(self.action_history, f, protocol=pickle.HIGHEST_PROTOCOL)
+                pickle.dump(action_data, f, protocol=pickle.HIGHEST_PROTOCOL)
+        return
+
+    def save_reward_helper(self):
+        # Save the reward history.
+        file_name = os.path.join(self.log_path, f"reward.pickle")
+        if not os.path.isfile(file_name):
+            with open(file_name, 'wb') as f:
+                pickle.dump(self.reward_history, f, protocol=pickle.HIGHEST_PROTOCOL)
+        # TODO: remove these later
+        file_name1 = os.path.join(self.log_path, f"reward_stats.pickle")
+        if not os.path.isfile(file_name1):
+            with open(file_name1, 'wb') as f:
+                pickle.dump({"avg": self.reward_avg, "violation": self.reward_worst}, f,
+                            protocol=pickle.HIGHEST_PROTOCOL)
         return
 
     def step(self, action):
@@ -316,26 +345,31 @@ class RLNetworkEnv(gym.Env):
         obs = self.get_obs()
         # Compute the reward.
         reward, all_packets = self.reward_function(prev_packet_count_shaper, next_packet_count_shaper)
+        # Record the reward history.
+        if self.save_reward:
+            self.reward_history.append(reward)
         # Check if the episode terminates.
         terminated = len(self.simulator.event_pool) == 0
         info = self.get_info(all_packets)
         truncated = False
         if terminated:
             # Save the collected statistics.
-            if self.save_inter_arrival:
-                self.save_inter_arrival_helper()
             if self.save_delay_stats:
                 self.save_delay_stats_helper()
             if self.save_action:
                 self.save_action_helper()
+            if self.save_reward:
+                self.save_reward_helper()
         return obs, reward, terminated, truncated, info
 
     def reset(self, seed=None, options=None):
         # Reset the random number generator.
-        super().reset(seed=seed)
+        if seed:
+            self.seed = seed
+        super().reset(seed=self.seed)
         # Reset the simulator.
         arrival_pattern = None if options is None else options["arrival_pattern"]
-        self.simulator.reset(seed=seed, arrival_pattern=arrival_pattern)
+        self.simulator.reset(seed=self.seed, arrival_pattern=arrival_pattern)
         self.time = 0
         # Configure the shapers.
         for flow_idx in range(self.simulator.num_flow):
@@ -343,6 +377,7 @@ class RLNetworkEnv(gym.Env):
                 tb.backlog_window_size = self.pause_interval
                 tb.num_uniform_samples = self.shaper_num_uniform_samples
                 tb.min_num_inter_arrival_collect = self.shaper_min_num_inter_arrival
+                tb.inter_arrival_noise_std = self.shaper_inter_arrival_noise_std
                 tb.local_protection_on = self.shaper_local_protection_on
                 tb.local_protection_time = self.shaper_local_protection_time
                 # Disable the unused control mode.
@@ -361,6 +396,11 @@ class RLNetworkEnv(gym.Env):
         self.shaper_backlog_ratio_peak = dict()
         # Keep track of the actions taken by the agent.
         self.action_history = []
+        # Keep track of the reward received by the agent.
+        self.reward_history = []
+        # TODO: remove these later
+        self.reward_avg = []
+        self.reward_worst = []
         # Restore the initial event pool if repeating the previous episode.
         if self.repeat and arrival_pattern is None:
             self.simulator.event_pool = copy.deepcopy(self.event_pool_copy)

@@ -234,9 +234,10 @@ def test_ppo(args=get_args()):
         assert os.path.isfile(model_path), "Please ensure the pre-trained model exists before evaluation."
         policy.load_state_dict(torch.load(model_path, map_location=args.device))
         eval_envs = make_eval_env(args, stats_path, enable_taad=args.enable_taad, same_seed=args.same_seed)
-        eval_collector = Collector(policy, eval_envs)
-        collect_result = eval_collector.collect(reset_before_collect=True, n_episode=args.test_num)
-        collect_result.pprint_asdict()
+        for env_activator in eval_envs:
+            eval_collector = Collector(policy, env_activator)
+            collect_result = eval_collector.collect(reset_before_collect=True, n_episode=1)
+            # collect_result.pprint_asdict()
 
 
 if __name__ == "__main__":
